@@ -111,9 +111,9 @@ python run_trade_signal.py --mode shadow --config config/micro_near_v1_1m.json -
 Сначала задайте API-переменные:
 
 ```powershell
-$env:KUCOIN_API_KEY = "YOUR_KEY"
-$env:KUCOIN_API_SECRET = "YOUR_SECRET"
-$env:KUCOIN_API_PASSPHRASE = "YOUR_PASSPHRASE"
+$env:KUCOIN_API_KEY = "69aab5455b3822000122365c"
+$env:KUCOIN_API_SECRET = "cad1d5be-f09c-4638-9035-222523dea8d1"
+$env:KUCOIN_API_PASSPHRASE = "Lecture16Kucoin6March!!"
 $env:KUCOIN_KEY_VERSION = "2"
 ```
 
