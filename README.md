@@ -100,18 +100,18 @@ ls -1 ~/Downloads/latest_forecast_signal_kucoin_rl.json
 Windows PowerShell:
 
 ```powershell
-$env:KUCOIN_API_KEY = "69aa79015b382200012235bc"
-$env:KUCOIN_API_SECRET = "a4fe6c4f-e1f8-4f79-8d42-7440a708d5f0"
-$env:KUCOIN_API_PASSPHRASE = "Lecture16Kucoin6March!!"
+$env:KUCOIN_API_KEY = "YOUR_KEY"
+$env:KUCOIN_API_SECRET = "YOUR_SECRET"
+$env:KUCOIN_API_PASSPHRASE = "YOUR_PASSPHRASE"
 $env:KUCOIN_KEY_VERSION = "2"
 ```
 
 macOS / Linux:
 
 ```bash
-export KUCOIN_API_KEY="69aa79015b382200012235bc"
-export KUCOIN_API_SECRET="a4fe6c4f-e1f8-4f79-8d42-7440a708d5f0"
-export KUCOIN_API_PASSPHRASE="Lecture16Kucoin6March!!"
+export KUCOIN_API_KEY="YOUR_KEY"
+export KUCOIN_API_SECRET="YOUR_SECRET"
+export KUCOIN_API_PASSPHRASE="YOUR_PASSPHRASE"
 export KUCOIN_KEY_VERSION="2"
 ```
 
@@ -128,6 +128,32 @@ PowerShell-эквивалент (если удобнее обратные слэ
 ```powershell
 python run_trade_signal.py --mode shadow --config config/micro_near_v1_1m.json --state-json "$HOME\Downloads\latest_forecast_signal_kucoin_rl.json"
 ```
+
+### Ошибка `400002 Invalid KC-API-TIMESTAMP`
+
+Причина: время на локальной машине отличается от времени сервера KuCoin.
+
+Решение:
+
+1. Синхронизируйте время Windows:
+
+```powershell
+w32tm /resync
+```
+
+2. Обновите репозиторий до версии с авто-синхронизацией времени в клиенте:
+
+```powershell
+git pull
+```
+
+3. Повторите `shadow`-запуск.
+
+### Ошибка `400004 Invalid KC-API-PASSPHRASE`
+
+Причина: неверная `KUCOIN_API_PASSPHRASE` для текущего API-ключа/секрета.
+
+Проверьте, что все три переменные (`KEY`, `SECRET`, `PASSPHRASE`) относятся к одному и тому же API-ключу на KuCoin.
 
 ### Шаг 3. Реальный запуск
 
