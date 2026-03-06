@@ -101,9 +101,9 @@ ls -1 ./notebooks/reports/kucoin_rl/latest_forecast_signal_*.json
 Windows PowerShell:
 
 ```powershell
-$env:KUCOIN_API_KEY = "YOUR_KEY"
-$env:KUCOIN_API_SECRET = "YOUR_SECRET"
-$env:KUCOIN_API_PASSPHRASE = "YOUR_PASSPHRASE"
+$env:KUCOIN_API_KEY = "69aa79015b382200012235bc"
+$env:KUCOIN_API_SECRET = "a4fe6c4f-e1f8-4f79-8d42-7440a708d5f0"
+$env:KUCOIN_API_PASSPHRASE = "Lecture16Kucoin6March!!"
 $env:KUCOIN_KEY_VERSION = "2"
 ```
 
@@ -112,7 +112,7 @@ macOS / Linux:
 ```bash
 export KUCOIN_API_KEY="YOUR_KEY"
 export KUCOIN_API_SECRET="YOUR_SECRET"
-export KUCOIN_API_PASSPHRASE="YOUR_PASSPHRASE"
+export KUCOIN_API_PASSPHRASE="Lecture16Kucoin6March!!"
 export KUCOIN_KEY_VERSION="2"
 ```
 
