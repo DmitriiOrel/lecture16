@@ -117,7 +117,16 @@ $env:KUCOIN_API_PASSPHRASE = "Lecture16Kucoin6March!!"
 $env:KUCOIN_KEY_VERSION = "2"
 ```
 
-Запуск:
+Запуск (основной режим, непрерывно каждую минуту):
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m delta_bot.live --mode live --config config/micro_near_v1_1m.json --state-file .runtime\bot_state.json --expected-slippage-bps 3 --loop --sleep-seconds 60
+```
+
+Остановить цикл: `Ctrl + C`.
+
+Единоразовый `live`-прогон (опционально, для ручной проверки):
 
 ```powershell
 python run_trade_signal.py --run-real-order --config config/micro_near_v1_1m.json --state-json "$HOME\Downloads\latest_forecast_signal_kucoin_rl.json"
