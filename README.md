@@ -1,27 +1,26 @@
-﻿# Торговая логика LSTM + GARCH + Kelly + торговые скрипты KuCoin
+# Торговая логика LSTM + GARCH + Kelly + торговые скрипты KuCoin
 
 Репозиторий содержит:
 
-- `notebooks/final_ml_rl_kucoin_demo.ipynb` - учебный ноутбук (в стиле лекций), где считаются LSTM-прогноз, GARCH-волатильность, Kelly-сигнал и формируется JSON для терминального бота.
-- `trade_signal_executor_kucoin.py` - CLI-исполнитель стратегии (POLICY / FORCED actions).
-- `run_trade_signal.py` - универсальный кроссплатформенный Python-раннер (автопоиск `latest_forecast_signal_*.json` в `Downloads` / `reports`).
+- `notebooks/final_ml_rl_kucoin_demo.ipynb` - учебный ноутбук в стиле лекций (LSTM + GARCH + Kelly), который формирует JSON-состояние для бота.
+- `trade_signal_executor_kucoin.py` - CLI-исполнитель стратегии (`shadow`/`live`, policy/force actions).
+- `run_trade_signal.py` - универсальный кроссплатформенный раннер (ищет `latest_forecast_signal_*.json` в `Downloads`/`reports` или берет `--state-json`).
 - `run_kucoin_trade_signal.ps1` - обертка для Windows PowerShell.
-- `run_kucoin_trade_signal.sh` - обертка для macOS / Linux.
-- `src/delta_bot/*.py` - ядро логики сигнала, risk engine, policy, execution, KuCoin REST client.
-- `config/micro_near_v1_1m.json` - профиль для минутного запуска (основной).
-- `config/micro_near_v1.json` - профиль для 15m сценария.
+- `run_kucoin_trade_signal.sh` - обертка для macOS/Linux.
+- `src/delta_bot/*.py` - ядро (policy, risk engine, execution planner, KuCoin client).
+- `config/micro_near_v1_1m.json` - основной профиль для минутного запуска.
 
-## Торговая логика LSTM + GARCH + Kelly
+## Торговая логика
 
 - LSTM прогнозирует цену `NEAR-USDT` на 1 минуту вперед.
-- `ret_hat` считается как лог-доходность из прогноза LSTM.
-- `sigma_hat` считается через GARCH строго по доходностям `returns = log(P_t / P_{t-1})`.
+- `ret_hat` = прогнозная лог-доходность из LSTM.
+- `sigma_hat` = оценка волатильности через GARCH по доходностям.
 - Kelly-сигнал:
   - `z = ret_hat / (sigma_hat^2 + eps)`
-  - `z` ограничивается: `clip(-2, 2)`
-- Размер входа в notional:
+  - `z = clip(z, -2, 2)`
+- Целевой notional:
   - `target_notional_usdt = 1.5 * 0.5 * z`
-- После расчета целевой spot-позиции строится futures-хедж (`target_hedge_ratio = -1`).
+- Дальше строится spot-позиция и фьючерсный хедж (`hedge_ratio = -1`).
 
 ## 1) Клонирование репозитория
 
@@ -39,15 +38,17 @@ git clone https://github.com/DmitriiOrel/lecture16.git
 cd .\lecture16
 ```
 
+Важно: все команды ниже выполняются из папки репозитория `lecture16`.
+
 ## 2) Google Colab (анализ и генерация сигнала)
 
-1. Откройте в Google Colab:
-   - `notebooks/final_ml_rl_kucoin_demo.ipynb`
-2. Запустите первую install-ячейку.
-3. После первой установки сделайте `Runtime -> Restart runtime`.
+1. Откройте в Colab: `notebooks/final_ml_rl_kucoin_demo.ipynb`
+2. Запустите install-ячейку.
+3. Сделайте `Runtime -> Restart runtime`.
 4. Запустите ноутбук сверху вниз.
-5. Ноутбук сохраняет JSON с последним сигналом в:
+5. В конце ноутбук создает файл:
    - `reports/kucoin_rl/latest_forecast_signal_kucoin_rl.json`
+6. Скачайте этот JSON на локальный компьютер (обычно в `Downloads`).
 
 ## 3) Локальная установка (Windows / macOS / Linux)
 
@@ -76,23 +77,21 @@ chmod +x run_kucoin_trade_signal.sh
 python -c "import tensorflow as tf; import arch; print('OK')"
 ```
 
-## 4) Проверка, что JSON действительно сохранен
+## 4) Проверка, что JSON реально есть
 
 ### Windows PowerShell
 
 ```powershell
-Get-ChildItem $HOME\Downloads\latest_forecast_signal_*.json
-Get-ChildItem .\reports\kucoin_rl\latest_forecast_signal_*.json
-Get-ChildItem .\notebooks\reports\kucoin_rl\latest_forecast_signal_*.json
+Get-ChildItem "$HOME\Downloads\latest_forecast_signal_kucoin_rl.json"
 ```
 
 ### macOS / Linux
 
 ```bash
-ls -1 ~/Downloads/latest_forecast_signal_*.json
-ls -1 ./reports/kucoin_rl/latest_forecast_signal_*.json
-ls -1 ./notebooks/reports/kucoin_rl/latest_forecast_signal_*.json
+ls -1 ~/Downloads/latest_forecast_signal_kucoin_rl.json
 ```
+
+Если файла нет в `Downloads`, значит его нужно заново скачать из Colab.
 
 ## 5) Универсальный запуск торговой логики (рекомендуется)
 
@@ -116,33 +115,46 @@ export KUCOIN_API_PASSPHRASE="Lecture16Kucoin6March!!"
 export KUCOIN_KEY_VERSION="2"
 ```
 
-### Шаг 2. Тестовый запуск без отправки ордера
+### Шаг 2. Тестовый запуск (без отправки ордера)
+
+Windows/macOS/Linux:
 
 ```bash
-python run_trade_signal.py --mode shadow --config config/micro_near_v1_1m.json --state-json notebooks/reports/kucoin_rl/latest_forecast_signal_kucoin_rl.json
+python run_trade_signal.py --mode shadow --config config/micro_near_v1_1m.json --state-json "$HOME/Downloads/latest_forecast_signal_kucoin_rl.json"
+```
+
+PowerShell-эквивалент (если удобнее обратные слэши):
+
+```powershell
+python run_trade_signal.py --mode shadow --config config/micro_near_v1_1m.json --state-json "$HOME\Downloads\latest_forecast_signal_kucoin_rl.json"
 ```
 
 ### Шаг 3. Реальный запуск
 
 ```bash
-python run_trade_signal.py --run-real-order --config config/micro_near_v1_1m.json --state-json notebooks/reports/kucoin_rl/latest_forecast_signal_kucoin_rl.json
+python run_trade_signal.py --run-real-order --config config/micro_near_v1_1m.json --state-json "$HOME/Downloads/latest_forecast_signal_kucoin_rl.json"
 ```
 
 ### Шаг 4. Принудительный тест BUY/SELL
 
 ```bash
-python run_trade_signal.py --run-real-order --config config/micro_near_v1_1m.json --state-json notebooks/reports/kucoin_rl/latest_forecast_signal_kucoin_rl.json --force-action BUY_SPOT --spot-qty 0.1
-python run_trade_signal.py --run-real-order --config config/micro_near_v1_1m.json --state-json notebooks/reports/kucoin_rl/latest_forecast_signal_kucoin_rl.json --force-action SELL_SPOT --spot-qty 0.1
-
-# обе ноги одновременно
-python run_trade_signal.py --run-real-order --config config/micro_near_v1_1m.json --state-json notebooks/reports/kucoin_rl/latest_forecast_signal_kucoin_rl.json --force-action BUY_BOTH --spot-qty 0.1 --futures-contracts 1
-python run_trade_signal.py --run-real-order --config config/micro_near_v1_1m.json --state-json notebooks/reports/kucoin_rl/latest_forecast_signal_kucoin_rl.json --force-action SELL_BOTH --spot-qty 0.1 --futures-contracts 1
+python run_trade_signal.py --run-real-order --config config/micro_near_v1_1m.json --state-json "$HOME/Downloads/latest_forecast_signal_kucoin_rl.json" --force-action BUY_SPOT --spot-qty 0.1
+python run_trade_signal.py --run-real-order --config config/micro_near_v1_1m.json --state-json "$HOME/Downloads/latest_forecast_signal_kucoin_rl.json" --force-action SELL_SPOT --spot-qty 0.1
 ```
 
-Если JSON лежит в нестандартной папке:
+Обе ноги одновременно:
 
 ```bash
-python run_trade_signal.py --config config/micro_near_v1_1m.json --state-json "C:/Users/your_user/Downloads/latest_forecast_signal_kucoin_rl.json"
+python run_trade_signal.py --run-real-order --config config/micro_near_v1_1m.json --state-json "$HOME/Downloads/latest_forecast_signal_kucoin_rl.json" --force-action BUY_BOTH --spot-qty 0.1 --futures-contracts 1
+python run_trade_signal.py --run-real-order --config config/micro_near_v1_1m.json --state-json "$HOME/Downloads/latest_forecast_signal_kucoin_rl.json" --force-action SELL_BOTH --spot-qty 0.1 --futures-contracts 1
+```
+
+### Шаг 5. Если не хотите указывать путь руками
+
+Можно дать раннеру авто-поиск в `Downloads`:
+
+```bash
+python run_trade_signal.py --mode shadow --config config/micro_near_v1_1m.json --search-downloads-only
 ```
 
 ## 6) Запуск через платформенные обертки (опционально)
@@ -150,39 +162,47 @@ python run_trade_signal.py --config config/micro_near_v1_1m.json --state-json "C
 ### Windows PowerShell
 
 ```powershell
-$env:KUCOIN_API_KEY = "YOUR_KEY"
-$env:KUCOIN_API_SECRET = "YOUR_SECRET"
-$env:KUCOIN_API_PASSPHRASE = "YOUR_PASSPHRASE"
-
-powershell -NoProfile -ExecutionPolicy Bypass -File .\run_kucoin_trade_signal.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\run_kucoin_trade_signal.ps1 -RunRealOrder -ForceAction BUY_SPOT -SpotQty 0.1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\run_kucoin_trade_signal.ps1 -StateJson "$HOME\Downloads\latest_forecast_signal_kucoin_rl.json"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\run_kucoin_trade_signal.ps1 -RunRealOrder -StateJson "$HOME\Downloads\latest_forecast_signal_kucoin_rl.json" -ForceAction BUY_SPOT -SpotQty 0.1
 ```
 
 ### macOS / Linux
 
 ```bash
-export KUCOIN_API_KEY="YOUR_KEY"
-export KUCOIN_API_SECRET="YOUR_SECRET"
-export KUCOIN_API_PASSPHRASE="YOUR_PASSPHRASE"
-
-./run_kucoin_trade_signal.sh
-./run_kucoin_trade_signal.sh --run-real-order --force-action BUY_SPOT --spot-qty 0.1
+./run_kucoin_trade_signal.sh --state-json "$HOME/Downloads/latest_forecast_signal_kucoin_rl.json"
+./run_kucoin_trade_signal.sh --run-real-order --state-json "$HOME/Downloads/latest_forecast_signal_kucoin_rl.json" --force-action BUY_SPOT --spot-qty 0.1
 ```
 
-## 7) Низкоуровневый запуск исполнителя (опционально)
+## 7) Частая ошибка и быстрое исправление
 
-```bash
-python trade_signal_executor_kucoin.py --mode shadow --config config/micro_near_v1_1m.json --state-json notebooks/reports/kucoin_rl/latest_forecast_signal_kucoin_rl.json
+Ошибка:
 
-python trade_signal_executor_kucoin.py --mode live --run-real-order --config config/micro_near_v1_1m.json --state-json notebooks/reports/kucoin_rl/latest_forecast_signal_kucoin_rl.json
+```text
+State JSON not found: ...\notebooks\reports\kucoin_rl\latest_forecast_signal_kucoin_rl.json
+```
+
+Причина: в команде указан путь, которого нет на диске.
+
+Решение:
+
+1. Проверить, где файл реально лежит (обычно `Downloads`):
+
+```powershell
+Get-ChildItem "$HOME\Downloads\latest_forecast_signal_kucoin_rl.json"
+```
+
+2. Передать этот путь в `--state-json`:
+
+```powershell
+python run_trade_signal.py --mode shadow --config config/micro_near_v1_1m.json --state-json "$HOME\Downloads\latest_forecast_signal_kucoin_rl.json"
 ```
 
 ## 8) Безопасность
 
-- Не храните KuCoin API ключи в ноутбуке и репозитории.
-- Используйте только переменные окружения `KUCOIN_API_KEY`, `KUCOIN_API_SECRET`, `KUCOIN_API_PASSPHRASE`.
-- По умолчанию сначала запускайте `shadow`, потом `live`.
-- Если ключи были где-то опубликованы, отзовите их и выпустите новые.
+- Не храните KuCoin API ключи в ноутбуке и в репозитории.
+- Используйте только env-переменные: `KUCOIN_API_KEY`, `KUCOIN_API_SECRET`, `KUCOIN_API_PASSPHRASE`.
+- Сначала запускайте `shadow`, затем `live`.
+- Если ключи были опубликованы, отзовите их и выпустите новые.
 
 ## 9) Что исключено из git
 
@@ -194,17 +214,17 @@ python trade_signal_executor_kucoin.py --mode live --run-real-order --config con
 - `reports/`
 - `.runtime/`
 
-## 10) Quick Kelly-hedge sizing example (NEAR)
+## 10) Quick Kelly sizing (NEAR)
 
-Если из LSTM/GARCH получили:
+Если:
 
 - `ret_hat = 0.0003`
 - `sigma_hat = 0.001`
 
 то:
 
-- `z_raw = ret_hat / sigma_hat^2 = 0.0003 / 0.000001 = 300`
+- `z_raw = ret_hat / sigma_hat^2 = 300`
 - `z = clip(300, -2, 2) = 2`
 - `target_notional = 1.5 * 0.5 * 2 = 1.5 USDT`
 
-Дальше бот переводит notional в `spot_qty`, строит futures-хедж и отправляет ребаланс-ордера.
+Далее бот конвертирует notional в `spot_qty`, строит futures-хедж и выполняет ребаланс.
