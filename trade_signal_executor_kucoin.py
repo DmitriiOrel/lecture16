@@ -351,8 +351,10 @@ def main() -> int:
     args = parse_args()
 
     cfg = load_config(args.config)
-    client = KuCoinRestClient.from_env()
     mode = "live" if args.run_real_order else args.mode
+    # In shadow mode we force no-auth client to avoid failures from stale env credentials.
+    # This keeps dry-run reproducible and independent from exchange auth state.
+    client = KuCoinRestClient(credentials=None) if mode == "shadow" else KuCoinRestClient.from_env()
 
     state_json_path: Path
     if args.state_json:
