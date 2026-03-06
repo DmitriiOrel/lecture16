@@ -33,7 +33,7 @@ class BotCoreTests(unittest.TestCase):
 
     def test_policy_positive_signal_generates_hedged_position(self) -> None:
         out = compute_target_positions(
-            ret_hat=0.005,
+            ret_hat=0.05,
             sigma_hat=0.01,
             spot_price=1.3,
             policy_cfg=self.cfg.policy,

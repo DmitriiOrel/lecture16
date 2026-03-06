@@ -38,6 +38,7 @@ class PolicyConfig:
     n_side_max_usdt: float
     allow_spot_short: bool
     target_hedge_ratio: float
+    kelly_z_scale: float = 1.0
 
 
 @dataclass(frozen=True)

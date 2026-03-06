@@ -33,7 +33,7 @@ def compute_target_positions(
     # spot_notional = n_side_max_usdt * KELLY_FRACTION * z
     # then hedge futures against resulting spot size.
     var_hat = sigma_hat * sigma_hat
-    raw_z = ret_hat / (var_hat + policy_cfg.epsilon)
+    raw_z = (ret_hat / (var_hat + policy_cfg.epsilon)) * policy_cfg.kelly_z_scale
     z = clip(raw_z, -policy_cfg.z_clip, policy_cfg.z_clip)
 
     target_notional = z * policy_cfg.n_side_max_usdt * KELLY_FRACTION
