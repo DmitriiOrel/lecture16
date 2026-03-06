@@ -44,7 +44,19 @@ def extract_spot_closes(candles: List[List[str]]) -> List[float]:
     return [float(row[2]) for row in sorted_rows]
 
 
+def compute_simple_returns(prices: List[float]) -> List[float]:
+    out: List[float] = []
+    for i in range(1, len(prices)):
+        prev = prices[i - 1]
+        cur = prices[i]
+        if prev <= 0 or cur <= 0:
+            continue
+        out.append(cur / prev - 1.0)
+    return out
+
+
 def compute_log_returns(prices: List[float]) -> List[float]:
+    # Kept for backward compatibility; strategy calculations use simple returns.
     out: List[float] = []
     for i in range(1, len(prices)):
         prev = prices[i - 1]
@@ -72,7 +84,7 @@ def naive_signal_from_spot_candles(
     if len(closes) < min_history + 1:
         raise ValueError("Not enough candle history for signal")
 
-    returns = compute_log_returns(closes)
+    returns = compute_simple_returns(closes)
     if not returns:
         raise ValueError("No valid returns from candles")
 
@@ -190,7 +202,7 @@ def arima_garch_signal_from_spot_candles(
     if len(closes) < max(min_history, 30):
         raise ValueError("Not enough candle history for ARIMA/GARCH signal")
 
-    returns = compute_log_returns(closes)
+    returns = compute_simple_returns(closes)
     if len(returns) < 20:
         raise ValueError("Not enough returns history for GARCH signal")
 
@@ -208,12 +220,13 @@ def arima_garch_signal_from_spot_candles(
         forecast_price = float(arima_fit.forecast(steps=horizon).iloc[-1])
         if forecast_price <= 0:
             raise ValueError("Non-positive ARIMA forecast")
-        # Convert forecast in price space into per-step log-return expectation.
-        ret_hat = math.log(forecast_price / last_close) / horizon
+        # Per-step simple return expectation from forecast in price space.
+        ret_hat = (forecast_price / last_close) ** (1.0 / horizon) - 1.0
     except Exception:
         fallback_ret = statistics.mean(returns[-min(len(returns), 20) :])
         ret_hat = fallback_ret
-        forecast_price = last_close * math.exp(ret_hat * horizon)
+        growth = max(1.0 + ret_hat, 1e-6)
+        forecast_price = last_close * (growth**horizon)
 
     try:
         from arch import arch_model
@@ -388,7 +401,7 @@ def lstm_garch_signal_from_spot_candles(
 
     frame, data_feat, feature_cols = _candles_to_feature_frame(candles)
     closes = [float(x) for x in frame["close"].tolist()]
-    returns = compute_log_returns(closes)
+    returns = compute_simple_returns(closes)
 
     if len(data_feat) < max(min_history, win + horizon + 30):
         raise ValueError("Not enough candle history for LSTM/GARCH signal")
@@ -479,7 +492,8 @@ def lstm_garch_signal_from_spot_candles(
         signal_model = "lstm_unavailable_fallback"
         fallback_ret = float(statistics.mean(returns[-min(len(returns), 20) :]))
         last_close = float(data_feat["close"].iloc[-1])
-        forecast_price = float(last_close * math.exp(fallback_ret * horizon))
+        growth = max(1.0 + fallback_ret, 1e-6)
+        forecast_price = float(last_close * (growth**horizon))
         # Baseline metrics on validation split by lag-1 close in window.
         y_valid_baseline = x_valid[:, -1, 0]
         valid_err = y_valid - y_valid_baseline
@@ -492,7 +506,7 @@ def lstm_garch_signal_from_spot_candles(
     if forecast_price <= 0 or last_close <= 0:
         raise ValueError("Invalid LSTM forecast/close values")
 
-    ret_hat = math.log(forecast_price / last_close) / horizon
+    ret_hat = (forecast_price / last_close) ** (1.0 / horizon) - 1.0
     sigma_hat = _compute_garch_sigma_from_returns(
         returns=returns,
         sigma_floor=sigma_floor,
