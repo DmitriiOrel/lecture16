@@ -122,6 +122,15 @@ $env:PYTHONPATH = "src"
 python -m delta_bot.live --mode live --config config/micro_near_v1_1m.json --state-file .runtime\bot_state.json --expected-slippage-bps 3 --loop --sleep-seconds 60
 ```
 
+Запуск именно PPO-агента (RL decisions в live):
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m delta_bot.live --mode live --config config/micro_near_v1_1m.json --state-file .runtime\bot_state.json --expected-slippage-bps 3 --loop --sleep-seconds 60 --decision-mode rl --rl-model-path "$HOME\Downloads\ppo_delta_neutral_near_1m.zip"
+```
+
+Примечание: `ppo_delta_neutral_near_1m.zip` сначала нужно обучить и скачать из Colab-ноутбука.
+
 Остановить цикл: `Ctrl + C`.
 
 Единоразовый `live`-прогон (опционально, для ручной проверки):

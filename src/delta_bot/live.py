@@ -12,6 +12,7 @@ from .execution import ExecutionPlanner, PlannedOrder
 from .kucoin_client import KuCoinApiError, KuCoinRestClient
 from .policy import (
     FLAT,
+    LONG_SPOT_SHORT_FUT,
     TargetPositions,
     compute_target_positions_from_basis_zscore,
     infer_policy_regime,
@@ -30,6 +31,9 @@ class RebalanceResult:
     mode: str
     equity_usdt: float
     signal_model: str
+    decision_mode: str
+    action_label: str
+    rl_action: int | None
     basis: float
     basis_mean: float
     basis_std: float
@@ -159,18 +163,137 @@ def _append_jsonl(path: Path, payload: Dict[str, str | int | float | dict | list
         fh.write(json.dumps(payload, default=str) + "\n")
 
 
+def _load_rl_model(path: str | Path):
+    try:
+        from stable_baselines3 import PPO
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            "stable-baselines3 is required for decision-mode=rl. Install it via "
+            "`pip install stable-baselines3`."
+        ) from exc
+
+    model_path = Path(path).expanduser()
+    if not model_path.exists() and model_path.with_suffix(".zip").exists():
+        model_path = model_path.with_suffix(".zip")
+    if not model_path.exists():
+        raise FileNotFoundError(f"RL model not found: {model_path}")
+    return PPO.load(str(model_path))
+
+
+def _predict_rl_action(*, model, observation: list[float], deterministic: bool) -> int:
+    import numpy as np
+
+    obs = np.asarray(observation, dtype=np.float32)
+    action, _ = model.predict(obs, deterministic=deterministic)
+    if hasattr(action, "item"):
+        return int(action.item())
+    return int(action)
+
+
+def _target_from_current_positions(
+    *,
+    current_spot_qty: float,
+    current_futures_contracts: int,
+    spot_price: float,
+    futures_multiplier_base: float,
+    z_score: float,
+) -> TargetPositions:
+    target_fut_base = current_futures_contracts * futures_multiplier_base
+    return TargetPositions(
+        z_score=z_score,
+        target_spot_notional_usdt=current_spot_qty * spot_price,
+        target_spot_qty=current_spot_qty,
+        target_futures_contracts=current_futures_contracts,
+        target_futures_base_qty=target_fut_base,
+        target_net_delta_base=current_spot_qty + target_fut_base,
+    )
+
+
+def _flat_target(*, z_score: float) -> TargetPositions:
+    return TargetPositions(
+        z_score=z_score,
+        target_spot_notional_usdt=0.0,
+        target_spot_qty=0.0,
+        target_futures_contracts=0,
+        target_futures_base_qty=0.0,
+        target_net_delta_base=0.0,
+    )
+
+
+def _target_from_rl_action(
+    *,
+    action: int,
+    basis_z: float,
+    spot_price: float,
+    current_spot_qty: float,
+    current_futures_contracts: int,
+    cfg: BotConfig,
+    regime: str,
+) -> TargetPositions:
+    in_position = regime == LONG_SPOT_SHORT_FUT
+
+    # 0: hold, 1: open/keep, 2: close (same semantics as Colab env)
+    if action == 1:
+        if in_position:
+            return _target_from_current_positions(
+                current_spot_qty=current_spot_qty,
+                current_futures_contracts=current_futures_contracts,
+                spot_price=spot_price,
+                futures_multiplier_base=cfg.instruments.futures_multiplier_base,
+                z_score=basis_z,
+            )
+        if basis_z > float(cfg.delta_neutral.entry_z):
+            return compute_target_positions_from_basis_zscore(
+                basis_z=basis_z,
+                spot_price=spot_price,
+                current_spot_qty=current_spot_qty,
+                current_futures_contracts=current_futures_contracts,
+                policy_cfg=cfg.policy,
+                instr_cfg=cfg.instruments,
+                delta_cfg=cfg.delta_neutral,
+            )
+        return _flat_target(z_score=basis_z)
+
+    if action == 2:
+        if in_position and abs(basis_z) < float(cfg.delta_neutral.exit_z):
+            return _flat_target(z_score=basis_z)
+        return _target_from_current_positions(
+            current_spot_qty=current_spot_qty,
+            current_futures_contracts=current_futures_contracts,
+            spot_price=spot_price,
+            futures_multiplier_base=cfg.instruments.futures_multiplier_base,
+            z_score=basis_z,
+        )
+
+    return _target_from_current_positions(
+        current_spot_qty=current_spot_qty,
+        current_futures_contracts=current_futures_contracts,
+        spot_price=spot_price,
+        futures_multiplier_base=cfg.instruments.futures_multiplier_base,
+        z_score=basis_z,
+    )
+
+
 def run_once(
     *,
     config_path: str | Path,
     mode: str,
     state_file: str | Path,
     expected_slippage_bps: float,
+    decision_mode: str = "policy",
+    rl_model=None,
+    rl_deterministic: bool = True,
 ) -> RebalanceResult:
     cfg = load_config(config_path)
     if cfg.timing.rebalance_tf_minutes != cfg.timing.data_tf_minutes:
         raise ValueError(
             "timing.rebalance_tf_minutes must match timing.data_tf_minutes for this strategy"
         )
+    if decision_mode not in {"policy", "rl"}:
+        raise ValueError(f"Unsupported decision_mode: {decision_mode}")
+    if decision_mode == "rl" and rl_model is None:
+        raise ValueError("decision_mode=rl requires loaded rl_model")
+
     client = KuCoinRestClient.from_env()
 
     state_store = JsonStateStore(state_file)
@@ -214,15 +337,37 @@ def run_once(
     runtime_state.roll_day_if_needed(equity_usdt=equity_usdt)
     daily_pnl_usdt = equity_usdt - runtime_state.day_start_equity_usdt
 
-    target = compute_target_positions_from_basis_zscore(
-        basis_z=basis_signal.basis_z,
-        spot_price=spot_price,
-        current_spot_qty=current_spot_qty,
-        current_futures_contracts=current_futures_contracts,
-        policy_cfg=cfg.policy,
-        instr_cfg=cfg.instruments,
-        delta_cfg=cfg.delta_neutral,
-    )
+    rl_action: int | None = None
+    action_label = "POLICY"
+    if decision_mode == "rl":
+        position_flag = 1.0 if regime == LONG_SPOT_SHORT_FUT else 0.0
+        spread_bps = basis_signal.basis * 10000.0
+        obs = [basis_signal.basis_z, basis_signal.basis, spread_bps, position_flag]
+        rl_action = _predict_rl_action(
+            model=rl_model,
+            observation=obs,
+            deterministic=rl_deterministic,
+        )
+        action_label = f"RL_{rl_action}"
+        target = _target_from_rl_action(
+            action=rl_action,
+            basis_z=basis_signal.basis_z,
+            spot_price=spot_price,
+            current_spot_qty=current_spot_qty,
+            current_futures_contracts=current_futures_contracts,
+            cfg=cfg,
+            regime=regime,
+        )
+    else:
+        target = compute_target_positions_from_basis_zscore(
+            basis_z=basis_signal.basis_z,
+            spot_price=spot_price,
+            current_spot_qty=current_spot_qty,
+            current_futures_contracts=current_futures_contracts,
+            policy_cfg=cfg.policy,
+            instr_cfg=cfg.instruments,
+            delta_cfg=cfg.delta_neutral,
+        )
 
     risk_engine = RiskEngine(cfg.risk_limits)
     risk_decision = risk_engine.evaluate(
@@ -288,6 +433,9 @@ def run_once(
                     "sent_orders": sent_orders,
                     "equity_usdt": equity_usdt,
                     "signal_model": "basis_zscore",
+                    "decision_mode": decision_mode,
+                    "action_label": action_label,
+                    "rl_action": rl_action,
                     "basis": basis_signal.basis,
                     "basis_mean": basis_signal.basis_mean,
                     "basis_std": basis_signal.basis_std,
@@ -302,6 +450,9 @@ def run_once(
         mode=mode,
         equity_usdt=equity_usdt,
         signal_model="basis_zscore",
+        decision_mode=decision_mode,
+        action_label=action_label,
+        rl_action=rl_action,
         basis=basis_signal.basis,
         basis_mean=basis_signal.basis_mean,
         basis_std=basis_signal.basis_std,
@@ -331,6 +482,23 @@ def main() -> None:
     parser.add_argument("--config", default=str(_default_config_path()))
     parser.add_argument("--state-file", default=str(_default_state_file()))
     parser.add_argument("--mode", choices=["shadow", "live"], default="shadow")
+    parser.add_argument(
+        "--decision-mode",
+        choices=["policy", "rl"],
+        default="policy",
+        help="policy: rule-based basis strategy, rl: PPO model decisions.",
+    )
+    parser.add_argument(
+        "--rl-model-path",
+        default="",
+        help="Path to PPO model (.zip) used when --decision-mode rl.",
+    )
+    parser.add_argument(
+        "--rl-stochastic",
+        action="store_true",
+        default=False,
+        help="Use stochastic RL actions (default is deterministic).",
+    )
     parser.add_argument("--expected-slippage-bps", type=float, default=3.0)
     parser.add_argument("--loop", action="store_true")
     parser.add_argument(
@@ -346,6 +514,15 @@ def main() -> None:
         if args.sleep_seconds > 0
         else max(int(cfg.timing.rebalance_tf_minutes * 60), 1)
     )
+    rl_model = None
+    if args.decision_mode == "rl":
+        if not args.rl_model_path:
+            raise ValueError("--rl-model-path is required when --decision-mode rl")
+        rl_model = _load_rl_model(args.rl_model_path)
+        print(
+            f"RL model loaded: {Path(args.rl_model_path).expanduser()} "
+            f"(deterministic={not args.rl_stochastic})"
+        )
 
     def _run() -> None:
         result = run_once(
@@ -353,6 +530,9 @@ def main() -> None:
             mode=args.mode,
             state_file=args.state_file,
             expected_slippage_bps=args.expected_slippage_bps,
+            decision_mode=args.decision_mode,
+            rl_model=rl_model,
+            rl_deterministic=not args.rl_stochastic,
         )
         payload = asdict(result)
         print(json.dumps(payload, indent=2, default=str))
