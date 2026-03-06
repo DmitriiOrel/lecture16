@@ -1,8 +1,8 @@
-# Торговая логика LSTM + GARCH + Kelly + торговые скрипты KuCoin
+# Торговая логика Basis Z-Score + Delta-Neutral + торговые скрипты KuCoin
 
 Репозиторий содержит:
 
-- `notebooks/final_ml_rl_kucoin_demo.ipynb` - учебный ноутбук (в стиле лекций) для расчета LSTM-прогноза, GARCH-волатильности, Kelly-сигнала и выгрузки JSON.
+- `notebooks/lecture16_basis_rl_colab.ipynb` - учебный Colab-ноутбук: OHLCV, basis z-score, baseline, RL (PPO), экспорт JSON.
 - `trade_signal_executor_kucoin.py` - CLI-исполнитель стратегии (`POLICY` / `FORCED` действия, `shadow` / `live`).
 - `run_trade_signal.py` - универсальный кроссплатформенный раннер (автопоиск `latest_forecast_signal_*.json` в `Downloads` / `reports`).
 - `run_kucoin_trade_signal.ps1` - обертка для Windows PowerShell.
@@ -10,17 +10,13 @@
 - `src/delta_bot/*.py` - ядро логики сигнала, risk engine, policy, execution, KuCoin REST client.
 - `config/micro_near_v1_1m.json` - основной профиль минутного запуска.
 
-## Торговая логика LSTM + GARCH + Kelly
+## Торговая логика Basis Z-Score + Delta-Neutral
 
-- LSTM прогнозирует цену `NEAR-USDT` на 1 минуту вперед.
-- `ret_hat` считается как прогнозная лог-доходность из LSTM.
-- `sigma_hat` считается через GARCH по доходностям.
-- Kelly-сигнал:
-  - `z = ret_hat / (sigma_hat^2 + eps)`
-  - `z = clip(z, -2, 2)`
-- Размер входа в notional:
-  - `target_notional_usdt = 1.5 * 0.5 * z`
-- Далее строится spot-позиция и фьючерсный хедж (`target_hedge_ratio = -1`).
+- Signal: `basis = (F - S) / S` + rolling `z-score`.
+- Entry: `z > entry_z` -> `BUY spot` + `SELL futures`.
+- Exit: `|z| < exit_z` -> close both legs.
+- Target: keep `spot_qty + futures_base_qty ? 0`.
+- Strategy is delta-neutral and trades basis mean reversion.
 
 ## 1) Клонирование репозитория
 
@@ -42,18 +38,20 @@ cd .\lecture16
 
 ## 2) Google Colab (анализ и генерация сигнала)
 
-Откройте или загрузите `notebooks/final_ml_rl_kucoin_demo.ipynb` в Google Colab.
+Откройте `notebooks/lecture16_basis_rl_colab.ipynb` в Google Colab:
+
+- https://colab.research.google.com/github/DmitriiOrel/lecture16/blob/master/notebooks/lecture16_basis_rl_colab.ipynb
 
 Запуск:
 
-1. Запустите первую install-ячейку.
-2. После первой установки сделайте `Runtime -> Restart runtime`.
+1. Запустите install-ячейку.
+2. При необходимости сделайте `Runtime -> Restart runtime`.
 3. Запустите ноутбук сверху вниз.
-4. Ноутбук сохраняет JSON с последним сигналом в:
+4. В конце ноутбук формирует JSON:
 
-`reports/kucoin_rl/latest_forecast_signal_kucoin_rl.json`
+`/content/latest_forecast_signal_kucoin_rl.json`
 
-Дальше скачайте этот файл на локальную машину (обычно в `Downloads`).
+5. Скачайте файл в `Downloads`.
 
 ## 3) Локальная установка (Windows / macOS / Linux)
 
@@ -111,9 +109,9 @@ python run_trade_signal.py --mode shadow --config config/micro_near_v1_1m.json -
 Сначала задайте API-переменные:
 
 ```powershell
-$env:KUCOIN_API_KEY = "69aab5455b3822000122365c"
-$env:KUCOIN_API_SECRET = "cad1d5be-f09c-4638-9035-222523dea8d1"
-$env:KUCOIN_API_PASSPHRASE = "Lecture16Kucoin6March!!"
+$env:KUCOIN_API_KEY = "YOUR_KUCOIN_API_KEY"
+$env:KUCOIN_API_SECRET = "YOUR_KUCOIN_API_SECRET"
+$env:KUCOIN_API_PASSPHRASE = "YOUR_KUCOIN_API_PASSPHRASE"
 $env:KUCOIN_KEY_VERSION = "2"
 ```
 
@@ -230,17 +228,18 @@ git pull
 - `reports/`
 - `.runtime/`
 
-## 10) Quick Kelly sizing example (NEAR)
+## 10) Quick Basis Z-Score example (NEAR)
 
-Если:
+Example:
 
-- `ret_hat = 0.0003`
-- `sigma_hat = 0.001`
+- `spot = 1.25`, `futures = 1.28`
+- `basis = (1.28 - 1.25) / 1.25 = 0.024`
+- `mean_basis = 0.010`, `std_basis = 0.006`
+- `z = (0.024 - 0.010) / 0.006 = 2.33`
 
-то:
+Since `z > entry_z`, strategy opens pair:
 
-- `z_raw = ret_hat / sigma_hat^2 = 300`
-- `z = clip(300, -2, 2) = 2`
-- `target_notional = 1.5 * 0.5 * 2 = 1.5 USDT`
+- `BUY spot`
+- `SELL futures`
 
-Дальше бот переводит notional в `spot_qty`, строит futures-хедж и выполняет ребаланс.
+Then it waits for `|z| < exit_z` and closes both legs.
