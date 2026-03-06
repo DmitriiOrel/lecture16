@@ -31,8 +31,6 @@
       "ret_1",
       "ret_3",
       "rv_20",
-      "ml_ret_hat",
-      "ml_sigma_hat",
       "position_spot_qty",
       "position_fut_contracts",
       "net_delta_base",
@@ -42,25 +40,7 @@
   },
   "signal": {
     "model": "basis_zscore",
-    "arima_order": [
-      1,
-      1,
-      2
-    ],
-    "forecast_horizon": 5,
-    "min_history": 80,
-    "window": 60,
-    "train_frac": 0.7,
-    "valid_frac": 0.15,
-    "lstm_units": 32,
-    "epochs": 25,
-    "batch_size": 32,
-    "patience": 6,
-    "random_seed": 42,
-    "sigma_floor": 0.0001,
-    "garch_p": 1,
-    "garch_q": 1,
-    "backtest_points": 120
+    "window": 60
   },
   "delta_neutral": {
     "basis_window": 60,

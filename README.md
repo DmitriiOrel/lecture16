@@ -77,7 +77,7 @@ chmod +x run_kucoin_trade_signal.sh
 Проверка импорта:
 
 ```bash
-python -c "import tensorflow as tf; import arch; print('OK')"
+python -c "import requests; import arch; print('OK')"
 ```
 
 ## 4) Проверка, что JSON действительно сохранен

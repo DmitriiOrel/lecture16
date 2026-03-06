@@ -11,7 +11,6 @@ sys.path.insert(0, str(SRC))
 
 from delta_bot.signal import (
     basis_zscore_signal_from_candles,
-    lstm_garch_signal_from_spot_candles,
     naive_signal_from_spot_candles,
     spot_candle_type_from_minutes,
 )
@@ -52,37 +51,6 @@ class SignalAndStateTests(unittest.TestCase):
         self.assertIsInstance(sig.ret_hat, float)
         self.assertGreater(sig.sigma_hat, 0)
         self.assertEqual(len(sig.closes), 21)
-
-    def test_lstm_garch_signal(self) -> None:
-        candles = []
-        px = 1.0
-        for i in range(1, 261):
-            drift = 1.0008 if i % 7 else 0.9985
-            px = px * drift
-            candles.append(
-                [
-                    str(1700000000 + i * 60),
-                    f"{px * 0.999:.6f}",
-                    f"{px:.6f}",
-                    f"{px * 1.001:.6f}",
-                    f"{px * 0.9985:.6f}",
-                    "1000",
-                    "1200",
-                ]
-            )
-        sig = lstm_garch_signal_from_spot_candles(
-            candles,
-            forecast_horizon=5,
-            window=30,
-            min_history=120,
-            epochs=2,
-            batch_size=16,
-            patience=1,
-        )
-        self.assertIsInstance(sig.ret_hat, float)
-        self.assertGreater(sig.sigma_hat, 0.0)
-        self.assertIn(sig.direction, (-1, 1))
-        self.assertGreater(sig.backtest.points, 5)
 
     def test_basis_zscore_signal(self) -> None:
         spot = []

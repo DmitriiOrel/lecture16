@@ -36,9 +36,6 @@ class PolicyConfig:
     epsilon: float
     allow_spot_short: bool
     target_hedge_ratio: float
-    z_clip: float = 2.0
-    n_side_max_usdt: float = 1.5
-    kelly_z_scale: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -84,21 +81,7 @@ class StateConfig:
 @dataclass(frozen=True)
 class SignalConfig:
     model: str
-    arima_order: List[int]
-    forecast_horizon: int
-    min_history: int
     window: int
-    train_frac: float
-    valid_frac: float
-    lstm_units: int
-    epochs: int
-    batch_size: int
-    patience: int
-    random_seed: int
-    sigma_floor: float
-    garch_p: int
-    garch_q: int
-    backtest_points: int
 
 
 @dataclass(frozen=True)
@@ -136,21 +119,7 @@ def _load_signal_config(data: Dict[str, Any]) -> SignalConfig:
     raw = data.get("signal", {})
     return SignalConfig(
         model=raw.get("model", "basis_zscore"),
-        arima_order=list(raw.get("arima_order", [1, 1, 2])),
-        forecast_horizon=int(raw.get("forecast_horizon", 5)),
-        min_history=int(raw.get("min_history", 120)),
-        window=int(raw.get("window", 30)),
-        train_frac=float(raw.get("train_frac", 0.7)),
-        valid_frac=float(raw.get("valid_frac", 0.15)),
-        lstm_units=int(raw.get("lstm_units", 32)),
-        epochs=int(raw.get("epochs", 30)),
-        batch_size=int(raw.get("batch_size", 32)),
-        patience=int(raw.get("patience", 8)),
-        random_seed=int(raw.get("random_seed", 42)),
-        sigma_floor=float(raw.get("sigma_floor", 1e-4)),
-        garch_p=int(raw.get("garch_p", 1)),
-        garch_q=int(raw.get("garch_q", 1)),
-        backtest_points=int(raw.get("backtest_points", 120)),
+        window=int(raw.get("window", 60)),
     )
 
 
