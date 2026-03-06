@@ -40,14 +40,22 @@
     ]
   },
   "signal": {
-    "model": "arima_garch_ref",
+    "model": "lstm_garch_ref",
     "arima_order": [
       1,
       1,
       2
     ],
     "forecast_horizon": 5,
-    "min_history": 120,
+    "min_history": 80,
+    "window": 30,
+    "train_frac": 0.7,
+    "valid_frac": 0.15,
+    "lstm_units": 32,
+    "epochs": 25,
+    "batch_size": 32,
+    "patience": 6,
+    "random_seed": 42,
     "sigma_floor": 0.0001,
     "garch_p": 1,
     "garch_q": 1,
@@ -80,7 +88,7 @@
     "drawdown_soft": 0.01
   },
   "risk_limits": {
-    "max_gross_notional_usdt": 3.0,
+    "max_gross_notional_usdt": 3.2,
     "max_single_order_notional_usdt": 0.35,
     "max_futures_leverage": 1.5,
     "target_net_delta_band_usdt": 0.26,

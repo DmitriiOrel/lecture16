@@ -13,8 +13,8 @@ from .kucoin_client import KuCoinApiError, KuCoinRestClient
 from .policy import TargetPositions, compute_target_positions
 from .risk import RiskContext, RiskDecision, RiskEngine
 from .signal import (
-    arima_garch_signal_from_spot_candles,
     futures_granularity_from_minutes,
+    lstm_garch_signal_from_spot_candles,
     naive_signal_from_spot_candles,
     spot_candle_type_from_minutes,
 )
@@ -194,32 +194,38 @@ def run_once(
     backtest_mse = 0.0
     backtest_mae = 0.0
     backtest_mape = 0.0
-    if cfg.signal.model.lower() == "arima_garch_ref":
+    if cfg.signal.model.lower() == "lstm_garch_ref":
         try:
-            arima_signal = arima_garch_signal_from_spot_candles(
+            lstm_signal = lstm_garch_signal_from_spot_candles(
                 spot_candles,
-                arima_order=cfg.signal.arima_order,
                 forecast_horizon=cfg.signal.forecast_horizon,
+                window=cfg.signal.window,
                 min_history=cfg.signal.min_history,
+                train_frac=cfg.signal.train_frac,
+                valid_frac=cfg.signal.valid_frac,
+                lstm_units=cfg.signal.lstm_units,
+                epochs=cfg.signal.epochs,
+                batch_size=cfg.signal.batch_size,
+                patience=cfg.signal.patience,
+                random_seed=cfg.signal.random_seed,
                 sigma_floor=cfg.signal.sigma_floor,
                 garch_p=cfg.signal.garch_p,
                 garch_q=cfg.signal.garch_q,
-                backtest_points=cfg.signal.backtest_points,
             )
-            signal = arima_signal
-            signal_model = "arima_garch_ref"
-            signal_direction = arima_signal.direction
-            forecast_price = arima_signal.forecast_price
-            backtest_mse = arima_signal.backtest.mse
-            backtest_mae = arima_signal.backtest.mae
-            backtest_mape = arima_signal.backtest.mape
+            signal = lstm_signal
+            signal_model = lstm_signal.signal_model
+            signal_direction = lstm_signal.direction
+            forecast_price = lstm_signal.forecast_price
+            backtest_mse = lstm_signal.backtest.rmse**2
+            backtest_mae = lstm_signal.backtest.mae
+            backtest_mape = lstm_signal.backtest.mape
         except Exception:
             signal = naive_signal_from_spot_candles(
                 spot_candles,
                 min_history=20,
                 sigma_floor=cfg.signal.sigma_floor,
             )
-            signal_model = "naive_fallback"
+            signal_model = "naive_fallback_from_lstm"
     else:
         signal = naive_signal_from_spot_candles(
             spot_candles,

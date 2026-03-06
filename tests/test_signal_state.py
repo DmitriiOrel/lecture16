@@ -10,7 +10,7 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from delta_bot.signal import (
-    arima_garch_signal_from_spot_candles,
+    lstm_garch_signal_from_spot_candles,
     naive_signal_from_spot_candles,
     spot_candle_type_from_minutes,
 )
@@ -52,10 +52,10 @@ class SignalAndStateTests(unittest.TestCase):
         self.assertGreater(sig.sigma_hat, 0)
         self.assertEqual(len(sig.closes), 21)
 
-    def test_arima_garch_signal(self) -> None:
+    def test_lstm_garch_signal(self) -> None:
         candles = []
         px = 1.0
-        for i in range(1, 181):
+        for i in range(1, 261):
             drift = 1.0008 if i % 7 else 0.9985
             px = px * drift
             candles.append(
@@ -69,17 +69,19 @@ class SignalAndStateTests(unittest.TestCase):
                     "1200",
                 ]
             )
-        sig = arima_garch_signal_from_spot_candles(
+        sig = lstm_garch_signal_from_spot_candles(
             candles,
-            arima_order=(1, 1, 2),
             forecast_horizon=5,
-            min_history=60,
-            backtest_points=60,
+            window=30,
+            min_history=120,
+            epochs=2,
+            batch_size=16,
+            patience=1,
         )
         self.assertIsInstance(sig.ret_hat, float)
         self.assertGreater(sig.sigma_hat, 0.0)
         self.assertIn(sig.direction, (-1, 1))
-        self.assertGreater(sig.backtest.points, 10)
+        self.assertGreater(sig.backtest.points, 5)
 
     def test_json_state_store(self) -> None:
         p = ROOT / "tests" / "_state_store_test.json"

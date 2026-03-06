@@ -26,37 +26,44 @@ def compute_target_positions(
     if spot_price <= 0:
         raise ValueError("spot_price must be > 0")
 
-    raw_z = ret_hat / (sigma_hat + policy_cfg.epsilon)
+    # Kelly-style sizing:
+    # z = ret_hat / sigma_hat^2
+    # spot_notional = n_side_max_usdt * z
+    # then hedge futures against resulting spot size.
+    var_hat = sigma_hat * sigma_hat
+    raw_z = ret_hat / (var_hat + policy_cfg.epsilon)
     z = clip(raw_z, -policy_cfg.z_clip, policy_cfg.z_clip)
 
     target_notional = z * policy_cfg.n_side_max_usdt
     if (not policy_cfg.allow_spot_short) and target_notional < 0:
         target_notional = 0.0
 
+    # 1) Raw spot target from Kelly notional.
     raw_spot_qty = target_notional / spot_price
-    spot_qty = floor_to_step(raw_spot_qty, instr_cfg.spot_base_increment)
-    if abs(spot_qty * spot_price) < instr_cfg.spot_min_funds_usdt:
-        spot_qty = 0.0
-        target_notional = 0.0
-    else:
-        target_notional = spot_qty * spot_price
+    if (not policy_cfg.allow_spot_short) and raw_spot_qty < 0:
+        raw_spot_qty = 0.0
 
-    target_fut_base = policy_cfg.target_hedge_ratio * spot_qty
-    target_contracts = int(round(target_fut_base / instr_cfg.futures_multiplier_base))
+    # 2) Futures contracts hedge that spot target.
+    # For hedge_ratio=-1 this is c = round(-q/m).
+    target_fut_base_raw = policy_cfg.target_hedge_ratio * raw_spot_qty
+    target_contracts = int(round(target_fut_base_raw / instr_cfg.futures_multiplier_base))
     target_contracts = int(
         floor_to_step(float(target_contracts), float(instr_cfg.futures_contract_step))
     )
     target_fut_base = target_contracts * instr_cfg.futures_multiplier_base
 
-    # Align spot target to futures contract granularity to keep hedge legs matched.
+    # 3) Spot is aligned to futures hedge so legs match.
     if policy_cfg.target_hedge_ratio != 0:
-        aligned_spot_qty = target_fut_base / policy_cfg.target_hedge_ratio
-        if (not policy_cfg.allow_spot_short) and aligned_spot_qty < 0:
-            aligned_spot_qty = 0.0
-            target_contracts = 0
-            target_fut_base = 0.0
-        spot_qty = floor_to_step(aligned_spot_qty, instr_cfg.spot_base_increment)
-        target_notional = spot_qty * spot_price
+        spot_qty = target_fut_base / policy_cfg.target_hedge_ratio
+    else:
+        spot_qty = raw_spot_qty
+    if (not policy_cfg.allow_spot_short) and spot_qty < 0:
+        spot_qty = 0.0
+        target_contracts = 0
+        target_fut_base = 0.0
+
+    spot_qty = floor_to_step(spot_qty, instr_cfg.spot_base_increment)
+    target_notional = spot_qty * spot_price
 
     if abs(target_notional) < instr_cfg.spot_min_funds_usdt:
         spot_qty = 0.0
