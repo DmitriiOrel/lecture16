@@ -20,6 +20,7 @@ class InstrumentsConfig:
     spot_base_increment: float
     spot_min_funds_usdt: float
     futures_contract_step: int
+    spot_min_size_base: float = 0.0
 
 
 @dataclass(frozen=True)

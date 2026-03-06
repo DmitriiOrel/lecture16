@@ -13,7 +13,8 @@
     "futures_multiplier_base": 0.1,
     "spot_base_increment": 0.0001,
     "spot_min_funds_usdt": 0.1,
-    "futures_contract_step": 1
+    "futures_contract_step": 1,
+    "spot_min_size_base": 0.1
   },
   "state": {
     "features": [

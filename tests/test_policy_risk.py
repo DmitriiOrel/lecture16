@@ -126,6 +126,35 @@ class BotCoreTests(unittest.TestCase):
         self.assertEqual(len(spot_sells), 2)
         self.assertEqual(len(fut_sells), 2)
 
+    def test_execution_planner_skips_spot_remainder_below_exchange_min_size(self) -> None:
+        planner = ExecutionPlanner(self.cfg.instruments, self.cfg.risk_limits, self.cfg.execution)
+        # Delta below 0.1 NEAR should be skipped to avoid KuCoin 400100 min-size rejection.
+        orders = planner.plan_rebalance(
+            current_spot_qty=0.0,
+            current_futures_contracts=0,
+            target_spot_qty=0.0999,
+            target_futures_contracts=0,
+            spot_price=1.26,
+            futures_price=1.26,
+        )
+        spot_orders = [o for o in orders if o.venue == "spot"]
+        self.assertEqual(len(spot_orders), 0)
+
+    def test_execution_planner_handles_float_boundary_near_min_size(self) -> None:
+        planner = ExecutionPlanner(self.cfg.instruments, self.cfg.risk_limits, self.cfg.execution)
+        # Float artifacts like 0.099999999 should still produce a 0.1 lot order.
+        orders = planner.plan_rebalance(
+            current_spot_qty=0.0,
+            current_futures_contracts=0,
+            target_spot_qty=0.099999999,
+            target_futures_contracts=0,
+            spot_price=1.26,
+            futures_price=1.26,
+        )
+        spot_orders = [o for o in orders if o.venue == "spot"]
+        self.assertEqual(len(spot_orders), 1)
+        self.assertAlmostEqual(spot_orders[0].size, 0.1, places=8)
+
 
 if __name__ == "__main__":
     unittest.main()
