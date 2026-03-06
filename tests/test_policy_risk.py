@@ -10,7 +10,7 @@ sys.path.insert(0, str(SRC))
 
 from delta_bot.config import load_config
 from delta_bot.execution import ExecutionPlanner
-from delta_bot.policy import compute_target_positions
+from delta_bot.policy import compute_target_positions_from_basis_zscore
 from delta_bot.reward import RewardInputs, compute_reward
 from delta_bot.risk import RiskContext, RiskEngine
 
@@ -21,28 +21,46 @@ class BotCoreTests(unittest.TestCase):
         cls.cfg = load_config(ROOT / "config" / "micro_near_v1.json")
 
     def test_policy_respects_min_funds(self) -> None:
-        out = compute_target_positions(
-            ret_hat=0.0001,
-            sigma_hat=10.0,  # intentionally high to force tiny target
-            spot_price=1.3,
+        out = compute_target_positions_from_basis_zscore(
+            basis_z=2.5,
+            spot_price=100.0,
+            current_spot_qty=0.0,
+            current_futures_contracts=0,
             policy_cfg=self.cfg.policy,
             instr_cfg=self.cfg.instruments,
+            delta_cfg=self.cfg.delta_neutral,
         )
         self.assertEqual(out.target_spot_qty, 0.0)
         self.assertEqual(out.target_futures_contracts, 0)
 
-    def test_policy_positive_signal_generates_hedged_position(self) -> None:
-        out = compute_target_positions(
-            ret_hat=0.05,
-            sigma_hat=0.01,
+    def test_policy_basis_entry_generates_hedged_position(self) -> None:
+        out = compute_target_positions_from_basis_zscore(
+            basis_z=2.0,
             spot_price=1.3,
+            current_spot_qty=0.0,
+            current_futures_contracts=0,
             policy_cfg=self.cfg.policy,
             instr_cfg=self.cfg.instruments,
+            delta_cfg=self.cfg.delta_neutral,
         )
         self.assertGreater(out.target_spot_qty, 0.0)
-        # Hedge ratio is -1.0, so contracts should be <= 0.
+        # Hedge ratio is -1.0, so contracts should be < 0.
+        self.assertAlmostEqual(out.z_score, 2.0, places=8)
         self.assertLessEqual(out.target_futures_contracts, 0)
         self.assertLess(abs(out.target_net_delta_base), 0.11)
+
+    def test_policy_basis_exit_closes_pair(self) -> None:
+        out = compute_target_positions_from_basis_zscore(
+            basis_z=0.05,
+            spot_price=1.3,
+            current_spot_qty=0.5,
+            current_futures_contracts=-5,
+            policy_cfg=self.cfg.policy,
+            instr_cfg=self.cfg.instruments,
+            delta_cfg=self.cfg.delta_neutral,
+        )
+        self.assertEqual(out.target_spot_qty, 0.0)
+        self.assertEqual(out.target_futures_contracts, 0)
 
     def test_reward_formula(self) -> None:
         r = compute_reward(

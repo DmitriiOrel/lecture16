@@ -10,6 +10,7 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from delta_bot.signal import (
+    basis_zscore_signal_from_candles,
     lstm_garch_signal_from_spot_candles,
     naive_signal_from_spot_candles,
     spot_candle_type_from_minutes,
@@ -82,6 +83,41 @@ class SignalAndStateTests(unittest.TestCase):
         self.assertGreater(sig.sigma_hat, 0.0)
         self.assertIn(sig.direction, (-1, 1))
         self.assertGreater(sig.backtest.points, 5)
+
+    def test_basis_zscore_signal(self) -> None:
+        spot = []
+        fut = []
+        s_px = 1.20
+        f_px = 1.205
+        for i in range(1, 140):
+            s_px = s_px * (1.0002 if i % 11 else 0.9998)
+            f_px = f_px * (1.00022 if i % 13 else 0.9997)
+            ts_s = str(1700000000 + i * 60)
+            ts_f = 1700000000000 + i * 60 * 1000
+            spot.append(
+                [
+                    ts_s,
+                    f"{s_px * 0.999:.6f}",
+                    f"{s_px:.6f}",
+                    f"{s_px * 1.001:.6f}",
+                    f"{s_px * 0.998:.6f}",
+                    "1000",
+                    "1200",
+                ]
+            )
+            fut.append([ts_f, s_px, s_px * 1.001, s_px * 0.999, f_px, 1000, 1200])
+
+        out = basis_zscore_signal_from_candles(
+            spot_candles=spot,
+            futures_candles=fut,
+            spot_price=float(spot[-1][2]),
+            futures_price=float(fut[-1][4]),
+            window=60,
+            epsilon=1e-8,
+        )
+        self.assertIsInstance(out.basis, float)
+        self.assertIsInstance(out.basis_z, float)
+        self.assertGreater(out.history_points, 100)
 
     def test_json_state_store(self) -> None:
         p = ROOT / "tests" / "_state_store_test.json"

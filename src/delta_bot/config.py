@@ -34,10 +34,10 @@ class ActionConfig:
 @dataclass(frozen=True)
 class PolicyConfig:
     epsilon: float
-    z_clip: float
-    n_side_max_usdt: float
     allow_spot_short: bool
     target_hedge_ratio: float
+    z_clip: float = 2.0
+    n_side_max_usdt: float = 1.5
     kelly_z_scale: float = 1.0
 
 
@@ -102,6 +102,15 @@ class SignalConfig:
 
 
 @dataclass(frozen=True)
+class DeltaNeutralConfig:
+    basis_window: int
+    entry_z: float
+    exit_z: float
+    max_spot_notional_usdt: float
+    mode: str = "long_spot_short_futures_only"
+
+
+@dataclass(frozen=True)
 class BotConfig:
     version: str
     account: AccountConfig
@@ -109,6 +118,7 @@ class BotConfig:
     instruments: InstrumentsConfig
     state: StateConfig
     signal: SignalConfig
+    delta_neutral: DeltaNeutralConfig
     action: ActionConfig
     policy: PolicyConfig
     reward: RewardConfig
@@ -125,7 +135,7 @@ def _require(data: Dict[str, Any], key: str) -> Any:
 def _load_signal_config(data: Dict[str, Any]) -> SignalConfig:
     raw = data.get("signal", {})
     return SignalConfig(
-        model=raw.get("model", "lstm_garch_ref"),
+        model=raw.get("model", "basis_zscore"),
         arima_order=list(raw.get("arima_order", [1, 1, 2])),
         forecast_horizon=int(raw.get("forecast_horizon", 5)),
         min_history=int(raw.get("min_history", 120)),
@@ -156,6 +166,18 @@ def load_config(path: str | Path) -> BotConfig:
         instruments=InstrumentsConfig(**_require(data, "instruments")),
         state=StateConfig(**_require(data, "state")),
         signal=_load_signal_config(data),
+        delta_neutral=DeltaNeutralConfig(
+            **data.get(
+                "delta_neutral",
+                {
+                    "basis_window": int(data.get("signal", {}).get("window", 30)),
+                    "entry_z": 1.5,
+                    "exit_z": 0.3,
+                    "max_spot_notional_usdt": 1.0,
+                    "mode": "long_spot_short_futures_only",
+                },
+            )
+        ),
         action=ActionConfig(**_require(data, "action")),
         policy=PolicyConfig(**_require(data, "policy")),
         reward=RewardConfig(**_require(data, "reward")),

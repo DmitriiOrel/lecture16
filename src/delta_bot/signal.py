@@ -39,6 +39,36 @@ def _sorted_spot_candles(candles: List[List[str]]) -> List[List[str]]:
     return sorted(candles, key=lambda row: int(row[0]))
 
 
+def _normalize_kucoin_ts(raw_ts: str | int | float) -> int:
+    ts = int(float(raw_ts))
+    if ts > 10**12:
+        ts //= 1000
+    return ts
+
+
+def _sorted_futures_candles(candles: List[List[str]]) -> List[List[str]]:
+    return sorted(candles, key=lambda row: _normalize_kucoin_ts(row[0]))
+
+
+def _spot_close_map(candles: List[List[str]]) -> dict[int, float]:
+    out: dict[int, float] = {}
+    for row in _sorted_spot_candles(candles):
+        ts = _normalize_kucoin_ts(row[0])
+        out[ts] = float(row[2])
+    return out
+
+
+def _futures_close_map(candles: List[List[str]]) -> dict[int, float]:
+    # Futures kline rows from KuCoin are usually:
+    # [time, open, high, low, close, volume, turnover]
+    out: dict[int, float] = {}
+    for row in _sorted_futures_candles(candles):
+        ts = _normalize_kucoin_ts(row[0])
+        close_idx = 4 if len(row) >= 5 else 2
+        out[ts] = float(row[close_idx])
+    return out
+
+
 def extract_spot_closes(candles: List[List[str]]) -> List[float]:
     sorted_rows = _sorted_spot_candles(candles)
     return [float(row[2]) for row in sorted_rows]
@@ -73,6 +103,60 @@ class SignalOutput:
     sigma_hat: float
     closes: List[float]
     returns: List[float]
+
+
+@dataclass(frozen=True)
+class BasisZscoreSignalOutput:
+    basis: float
+    basis_mean: float
+    basis_std: float
+    basis_z: float
+    history_points: int
+    basis_history: List[float]
+
+
+def basis_zscore_signal_from_candles(
+    spot_candles: List[List[str]],
+    futures_candles: List[List[str]],
+    *,
+    spot_price: float,
+    futures_price: float,
+    window: int = 60,
+    epsilon: float = 1e-8,
+) -> BasisZscoreSignalOutput:
+    if spot_price <= 0 or futures_price <= 0:
+        raise ValueError("spot_price and futures_price must be > 0")
+    basis_now = (futures_price - spot_price) / spot_price
+
+    spot_map = _spot_close_map(spot_candles)
+    fut_map = _futures_close_map(futures_candles)
+    common_ts = sorted(set(spot_map.keys()).intersection(fut_map.keys()))
+
+    basis_hist: List[float] = []
+    for ts in common_ts:
+        s = float(spot_map[ts])
+        f = float(fut_map[ts])
+        if s <= 0 or f <= 0:
+            continue
+        basis_hist.append((f - s) / s)
+
+    lookback = max(int(window), 5)
+    if len(basis_hist) < lookback + 1:
+        raise ValueError("Not enough overlapping basis history")
+
+    ref = basis_hist[-lookback - 1 : -1]
+    mu = float(statistics.mean(ref))
+    sigma = float(statistics.pstdev(ref))
+    z = (basis_now - mu) / max(sigma, float(epsilon))
+
+    return BasisZscoreSignalOutput(
+        basis=float(basis_now),
+        basis_mean=mu,
+        basis_std=max(sigma, float(epsilon)),
+        basis_z=float(z),
+        history_points=int(len(basis_hist)),
+        basis_history=basis_hist,
+    )
 
 
 def naive_signal_from_spot_candles(

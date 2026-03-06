@@ -10,12 +10,16 @@ from typing import Dict, List
 from .config import BotConfig, load_config
 from .execution import ExecutionPlanner, PlannedOrder
 from .kucoin_client import KuCoinApiError, KuCoinRestClient
-from .policy import TargetPositions, compute_target_positions
+from .policy import (
+    FLAT,
+    TargetPositions,
+    compute_target_positions_from_basis_zscore,
+    infer_policy_regime,
+)
 from .risk import RiskContext, RiskDecision, RiskEngine
 from .signal import (
+    basis_zscore_signal_from_candles,
     futures_granularity_from_minutes,
-    lstm_garch_signal_from_spot_candles,
-    naive_signal_from_spot_candles,
     spot_candle_type_from_minutes,
 )
 from .state_store import JsonStateStore, RuntimeState
@@ -26,13 +30,11 @@ class RebalanceResult:
     mode: str
     equity_usdt: float
     signal_model: str
-    signal_direction: int
-    forecast_price: float
-    backtest_mse: float
-    backtest_mae: float
-    backtest_mape: float
-    ret_hat: float
-    sigma_hat: float
+    basis: float
+    basis_mean: float
+    basis_std: float
+    basis_z: float
+    regime: str
     spot_price: float
     futures_price: float
     current_spot_qty: float
@@ -182,59 +184,26 @@ def run_once(
         symbol=cfg.instruments.spot_symbol,
         candle_type=spot_candle_type,
     )
-    # Futures candles are fetched for parity with the data layer, even if the signal is spot-based.
-    _ = client.get_futures_candles(
+    futures_candles = client.get_futures_candles(
         symbol=cfg.instruments.futures_symbol,
         granularity=fut_granularity,
     )
 
-    signal_model = "naive"
-    signal_direction = 0
-    forecast_price = 0.0
-    backtest_mse = 0.0
-    backtest_mae = 0.0
-    backtest_mape = 0.0
-    if cfg.signal.model.lower() == "lstm_garch_ref":
-        try:
-            lstm_signal = lstm_garch_signal_from_spot_candles(
-                spot_candles,
-                forecast_horizon=cfg.signal.forecast_horizon,
-                window=cfg.signal.window,
-                min_history=cfg.signal.min_history,
-                train_frac=cfg.signal.train_frac,
-                valid_frac=cfg.signal.valid_frac,
-                lstm_units=cfg.signal.lstm_units,
-                epochs=cfg.signal.epochs,
-                batch_size=cfg.signal.batch_size,
-                patience=cfg.signal.patience,
-                random_seed=cfg.signal.random_seed,
-                sigma_floor=cfg.signal.sigma_floor,
-                garch_p=cfg.signal.garch_p,
-                garch_q=cfg.signal.garch_q,
-            )
-            signal = lstm_signal
-            signal_model = lstm_signal.signal_model
-            signal_direction = lstm_signal.direction
-            forecast_price = lstm_signal.forecast_price
-            backtest_mse = lstm_signal.backtest.rmse**2
-            backtest_mae = lstm_signal.backtest.mae
-            backtest_mape = lstm_signal.backtest.mape
-        except Exception:
-            signal = naive_signal_from_spot_candles(
-                spot_candles,
-                min_history=20,
-                sigma_floor=cfg.signal.sigma_floor,
-            )
-            signal_model = "naive_fallback_from_lstm"
-    else:
-        signal = naive_signal_from_spot_candles(
-            spot_candles,
-            min_history=20,
-            sigma_floor=cfg.signal.sigma_floor,
-        )
-
     spot_price, futures_price = _extract_prices(client, cfg)
     current_spot_qty, current_futures_contracts = _current_positions(client, cfg)
+
+    basis_signal = basis_zscore_signal_from_candles(
+        spot_candles=spot_candles,
+        futures_candles=futures_candles,
+        spot_price=spot_price,
+        futures_price=futures_price,
+        window=cfg.delta_neutral.basis_window,
+        epsilon=cfg.policy.epsilon,
+    )
+    regime = infer_policy_regime(
+        current_spot_qty=current_spot_qty,
+        current_futures_contracts=current_futures_contracts,
+    ).regime
 
     equity_usdt = _estimate_equity_usdt(
         client=client,
@@ -245,12 +214,14 @@ def run_once(
     runtime_state.roll_day_if_needed(equity_usdt=equity_usdt)
     daily_pnl_usdt = equity_usdt - runtime_state.day_start_equity_usdt
 
-    target = compute_target_positions(
-        ret_hat=signal.ret_hat,
-        sigma_hat=signal.sigma_hat,
+    target = compute_target_positions_from_basis_zscore(
+        basis_z=basis_signal.basis_z,
         spot_price=spot_price,
+        current_spot_qty=current_spot_qty,
+        current_futures_contracts=current_futures_contracts,
         policy_cfg=cfg.policy,
         instr_cfg=cfg.instruments,
+        delta_cfg=cfg.delta_neutral,
     )
 
     risk_engine = RiskEngine(cfg.risk_limits)
@@ -269,7 +240,10 @@ def run_once(
         ),
         target_spot_qty=target.target_spot_qty,
         target_futures_contracts=target.target_futures_contracts,
-        is_new_entry=(abs(current_spot_qty) < 1e-12 and current_futures_contracts == 0),
+        is_new_entry=(
+            regime == FLAT
+            and (abs(target.target_spot_qty) > 1e-12 or target.target_futures_contracts != 0)
+        ),
     )
 
     planner = ExecutionPlanner(cfg.instruments, cfg.risk_limits, cfg.execution)
@@ -313,14 +287,12 @@ def run_once(
                     "planned_orders": [asdict(x) for x in planned_orders],
                     "sent_orders": sent_orders,
                     "equity_usdt": equity_usdt,
-                    "signal_model": signal_model,
-                    "signal_direction": signal_direction,
-                    "forecast_price": forecast_price,
-                    "backtest_mse": backtest_mse,
-                    "backtest_mae": backtest_mae,
-                    "backtest_mape": backtest_mape,
-                    "ret_hat": signal.ret_hat,
-                    "sigma_hat": signal.sigma_hat,
+                    "signal_model": "basis_zscore",
+                    "basis": basis_signal.basis,
+                    "basis_mean": basis_signal.basis_mean,
+                    "basis_std": basis_signal.basis_std,
+                    "basis_z": basis_signal.basis_z,
+                    "regime": regime,
                 },
             )
         runtime_state.roll_day_if_needed(equity_usdt=equity_usdt)
@@ -329,14 +301,12 @@ def run_once(
     return RebalanceResult(
         mode=mode,
         equity_usdt=equity_usdt,
-        signal_model=signal_model,
-        signal_direction=signal_direction,
-        forecast_price=forecast_price,
-        backtest_mse=backtest_mse,
-        backtest_mae=backtest_mae,
-        backtest_mape=backtest_mape,
-        ret_hat=signal.ret_hat,
-        sigma_hat=signal.sigma_hat,
+        signal_model="basis_zscore",
+        basis=basis_signal.basis,
+        basis_mean=basis_signal.basis_mean,
+        basis_std=basis_signal.basis_std,
+        basis_z=basis_signal.basis_z,
+        regime=regime,
         spot_price=spot_price,
         futures_price=futures_price,
         current_spot_qty=current_spot_qty,

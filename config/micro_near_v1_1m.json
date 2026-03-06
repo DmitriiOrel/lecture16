@@ -41,7 +41,7 @@
     ]
   },
   "signal": {
-    "model": "lstm_garch_ref",
+    "model": "basis_zscore",
     "arima_order": [
       1,
       1,
@@ -49,7 +49,7 @@
     ],
     "forecast_horizon": 1,
     "min_history": 80,
-    "window": 30,
+    "window": 60,
     "train_frac": 0.7,
     "valid_frac": 0.15,
     "lstm_units": 32,
@@ -61,6 +61,13 @@
     "garch_p": 1,
     "garch_q": 1,
     "backtest_points": 180
+  },
+  "delta_neutral": {
+    "basis_window": 60,
+    "entry_z": 1.5,
+    "exit_z": 0.3,
+    "max_spot_notional_usdt": 1.0,
+    "mode": "long_spot_short_futures_only"
   },
   "action": {
     "type": "discrete_contract_delta",
@@ -76,9 +83,6 @@
   },
   "policy": {
     "epsilon": 1e-06,
-    "kelly_z_scale": 0.001,
-    "z_clip": 2.0,
-    "n_side_max_usdt": 1.5,
     "allow_spot_short": false,
     "target_hedge_ratio": -1.0
   },

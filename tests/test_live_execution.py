@@ -29,11 +29,11 @@ class _FakeKuCoinClient:
         # Spot format: [time, open, close, high, low, volume, turnover]
         rows = []
         px = 1.20
-        for i in range(1, 40):
+        for i in range(1, 120):
             px = px * 1.0025
             rows.append(
                 [
-                    str(1700000000 + i * 900),
+                    str(1700000000 + i * 60),
                     f"{px * 0.998:.6f}",
                     f"{px:.6f}",
                     f"{px * 1.002:.6f}",
@@ -45,7 +45,22 @@ class _FakeKuCoinClient:
         return rows
 
     def get_futures_candles(self, symbol: str, granularity: int):
-        return [[1700000000000, 1.25, 1.27, 1.24, 1.26, 10000, 12000]]
+        rows = []
+        px = 1.205
+        for i in range(1, 120):
+            px = px * 1.0022
+            rows.append(
+                [
+                    1700000000000 + i * 60 * 1000,
+                    px * 0.999,
+                    px * 1.001,
+                    px * 0.998,
+                    px,
+                    10000,
+                    12000,
+                ]
+            )
+        return rows
 
     def get_spot_ticker(self, symbol: str):
         return {"price": "1.30"}
@@ -88,7 +103,8 @@ class LiveExecutionTests(unittest.TestCase):
         )
         try:
             with patch("delta_bot.live.KuCoinRestClient.from_env", return_value=fake), patch(
-                "delta_bot.live.compute_target_positions", return_value=forced_target
+                "delta_bot.live.compute_target_positions_from_basis_zscore",
+                return_value=forced_target,
             ):
                 result = run_once(
                     config_path=ROOT / "config" / "micro_near_v1.json",
@@ -125,7 +141,8 @@ class LiveExecutionTests(unittest.TestCase):
         )
         try:
             with patch("delta_bot.live.KuCoinRestClient.from_env", return_value=fake), patch(
-                "delta_bot.live.compute_target_positions", return_value=forced_target
+                "delta_bot.live.compute_target_positions_from_basis_zscore",
+                return_value=forced_target,
             ):
                 with self.assertRaises(KuCoinApiError):
                     run_once(

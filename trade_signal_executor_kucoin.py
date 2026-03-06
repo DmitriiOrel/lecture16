@@ -16,8 +16,18 @@ sys.path.insert(0, str(ROOT / "src"))
 from delta_bot.config import BotConfig, load_config
 from delta_bot.execution import ExecutionPlanner, PlannedOrder
 from delta_bot.kucoin_client import KuCoinApiError, KuCoinRestClient
-from delta_bot.policy import TargetPositions, compute_target_positions
+from delta_bot.policy import (
+    FLAT,
+    TargetPositions,
+    compute_target_positions_from_basis_zscore,
+    infer_policy_regime,
+)
 from delta_bot.risk import RiskContext, RiskEngine
+from delta_bot.signal import (
+    basis_zscore_signal_from_candles,
+    futures_granularity_from_minutes,
+    spot_candle_type_from_minutes,
+)
 from delta_bot.state_store import JsonStateStore, RuntimeState
 
 DEFAULT_OUTPUT_DIR = Path("reports/kucoin_rl")
@@ -140,14 +150,17 @@ def _read_state_payload(path: Path) -> dict:
         return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
-def _extract_signal_from_payload(payload: dict) -> tuple[float, float]:
-    ret_hat = float(payload.get("ret_hat", 0.0))
-    sigma_hat = float(payload.get("sigma_hat", 0.0))
-    if not math.isfinite(ret_hat):
-        ret_hat = 0.0
-    if (not math.isfinite(sigma_hat)) or sigma_hat <= 0:
-        sigma_hat = 0.003
-    return ret_hat, sigma_hat
+def _extract_basis_from_payload(payload: dict) -> tuple[float | None, float, float, float]:
+    basis_z = payload.get("basis_z", None)
+    basis = float(payload.get("basis", 0.0) or 0.0)
+    basis_mean = float(payload.get("basis_mean", 0.0) or 0.0)
+    basis_std = float(payload.get("basis_std", 0.0) or 0.0)
+    if basis_z is None:
+        return None, basis, basis_mean, basis_std
+    basis_z_f = float(basis_z)
+    if not math.isfinite(basis_z_f):
+        return None, basis, basis_mean, basis_std
+    return basis_z_f, basis, basis_mean, basis_std
 
 
 def _extract_prices(payload: dict, client: KuCoinRestClient, cfg: BotConfig) -> tuple[float, float]:
@@ -158,6 +171,38 @@ def _extract_prices(payload: dict, client: KuCoinRestClient, cfg: BotConfig) -> 
     spot_t = client.get_spot_ticker(cfg.instruments.spot_symbol)
     fut_t = client.get_futures_ticker(cfg.instruments.futures_symbol)
     return float(spot_t["price"]), float(fut_t["price"])
+
+
+def _compute_basis_signal_from_market(
+    client: KuCoinRestClient,
+    cfg: BotConfig,
+    spot_price: float,
+    futures_price: float,
+) -> tuple[float, float, float, float]:
+    spot_candle_type = spot_candle_type_from_minutes(cfg.timing.data_tf_minutes)
+    fut_granularity = futures_granularity_from_minutes(cfg.timing.data_tf_minutes)
+    spot_candles = client.get_spot_candles(
+        symbol=cfg.instruments.spot_symbol,
+        candle_type=spot_candle_type,
+    )
+    futures_candles = client.get_futures_candles(
+        symbol=cfg.instruments.futures_symbol,
+        granularity=fut_granularity,
+    )
+    basis_signal = basis_zscore_signal_from_candles(
+        spot_candles=spot_candles,
+        futures_candles=futures_candles,
+        spot_price=spot_price,
+        futures_price=futures_price,
+        window=cfg.delta_neutral.basis_window,
+        epsilon=cfg.policy.epsilon,
+    )
+    return (
+        basis_signal.basis_z,
+        basis_signal.basis,
+        basis_signal.basis_mean,
+        basis_signal.basis_std,
+    )
 
 
 def _current_positions(client: KuCoinRestClient, cfg: BotConfig) -> tuple[float, int]:
@@ -189,32 +234,26 @@ def _estimate_equity_usdt(
 
 def _forced_target(
     action: str,
-    ret_hat: float,
-    sigma_hat: float,
+    basis_z: float,
     spot_price: float,
+    current_spot_qty: float,
+    current_futures_contracts: int,
     cfg: BotConfig,
     allow_short: bool,
 ) -> TargetPositions:
     policy_cfg = replace(cfg.policy, allow_spot_short=bool(allow_short))
-    if action == "HOLD":
-        return TargetPositions(
-            z_score=0.0,
-            target_spot_notional_usdt=0.0,
-            target_spot_qty=0.0,
-            target_futures_contracts=0,
-            target_futures_base_qty=0.0,
-            target_net_delta_base=0.0,
-        )
-    if action == "BUY":
-        ret_hat = abs(sigma_hat)
-    elif action == "SELL":
-        ret_hat = -abs(sigma_hat)
-    return compute_target_positions(
-        ret_hat=ret_hat,
-        sigma_hat=sigma_hat,
+    if action in {"SELL", "HOLD"}:
+        basis_z = 0.0
+    elif action == "BUY":
+        basis_z = max(float(cfg.delta_neutral.entry_z) + 1.0, basis_z)
+    return compute_target_positions_from_basis_zscore(
+        basis_z=basis_z,
         spot_price=spot_price,
+        current_spot_qty=current_spot_qty,
+        current_futures_contracts=current_futures_contracts,
         policy_cfg=policy_cfg,
         instr_cfg=cfg.instruments,
+        delta_cfg=cfg.delta_neutral,
     )
 
 
@@ -368,9 +407,22 @@ def main() -> int:
         state_json_path = auto
     payload = _read_state_payload(state_json_path)
 
-    ret_hat, sigma_hat = _extract_signal_from_payload(payload)
+    basis_z_payload, basis, basis_mean, basis_std = _extract_basis_from_payload(payload)
     spot_price, futures_price = _extract_prices(payload, client=client, cfg=cfg)
+    if basis_z_payload is None:
+        basis_z, basis, basis_mean, basis_std = _compute_basis_signal_from_market(
+            client=client,
+            cfg=cfg,
+            spot_price=spot_price,
+            futures_price=futures_price,
+        )
+    else:
+        basis_z = basis_z_payload
     current_spot_qty, current_futures_contracts = _current_positions(client=client, cfg=cfg)
+    regime = infer_policy_regime(
+        current_spot_qty=current_spot_qty,
+        current_futures_contracts=current_futures_contracts,
+    ).regime
     equity_usdt = _estimate_equity_usdt(
         client=client,
         cfg=cfg,
@@ -387,9 +439,10 @@ def main() -> int:
     if args.force_action and not manual_force_mode:
         target = _forced_target(
             action=args.force_action,
-            ret_hat=ret_hat,
-            sigma_hat=sigma_hat,
+            basis_z=basis_z,
             spot_price=spot_price,
+            current_spot_qty=current_spot_qty,
+            current_futures_contracts=current_futures_contracts,
             cfg=cfg,
             allow_short=args.allow_short,
         )
@@ -414,12 +467,14 @@ def main() -> int:
         action_label = f"FORCED_{args.force_action}"
     else:
         policy_cfg = replace(cfg.policy, allow_spot_short=bool(args.allow_short))
-        target = compute_target_positions(
-            ret_hat=ret_hat,
-            sigma_hat=sigma_hat,
+        target = compute_target_positions_from_basis_zscore(
+            basis_z=basis_z,
             spot_price=spot_price,
+            current_spot_qty=current_spot_qty,
+            current_futures_contracts=current_futures_contracts,
             policy_cfg=policy_cfg,
             instr_cfg=cfg.instruments,
+            delta_cfg=cfg.delta_neutral,
         )
         action_label = "POLICY"
 
@@ -439,7 +494,10 @@ def main() -> int:
         ),
         target_spot_qty=target.target_spot_qty,
         target_futures_contracts=target.target_futures_contracts,
-        is_new_entry=(abs(current_spot_qty) < 1e-12 and current_futures_contracts == 0),
+        is_new_entry=(
+            regime == FLAT
+            and (abs(target.target_spot_qty) > 1e-12 or target.target_futures_contracts != 0)
+        ),
     )
 
     planned_orders: List[PlannedOrder] = []
@@ -497,8 +555,11 @@ def main() -> int:
         "mode": mode,
         "action_label": action_label,
         "state_json_path": str(state_json_path),
-        "ret_hat": ret_hat,
-        "sigma_hat": sigma_hat,
+        "basis": basis,
+        "basis_mean": basis_mean,
+        "basis_std": basis_std,
+        "basis_z": basis_z,
+        "regime": regime,
         "spot_price": spot_price,
         "futures_price": futures_price,
         "equity_usdt": equity_usdt,
