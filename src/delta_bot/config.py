@@ -80,12 +80,25 @@ class StateConfig:
 
 
 @dataclass(frozen=True)
+class SignalConfig:
+    model: str
+    arima_order: List[int]
+    forecast_horizon: int
+    min_history: int
+    sigma_floor: float
+    garch_p: int
+    garch_q: int
+    backtest_points: int
+
+
+@dataclass(frozen=True)
 class BotConfig:
     version: str
     account: AccountConfig
     timing: TimingConfig
     instruments: InstrumentsConfig
     state: StateConfig
+    signal: SignalConfig
     action: ActionConfig
     policy: PolicyConfig
     reward: RewardConfig
@@ -99,6 +112,20 @@ def _require(data: Dict[str, Any], key: str) -> Any:
     return data[key]
 
 
+def _load_signal_config(data: Dict[str, Any]) -> SignalConfig:
+    raw = data.get("signal", {})
+    return SignalConfig(
+        model=raw.get("model", "arima_garch_ref"),
+        arima_order=list(raw.get("arima_order", [1, 1, 2])),
+        forecast_horizon=int(raw.get("forecast_horizon", 5)),
+        min_history=int(raw.get("min_history", 120)),
+        sigma_floor=float(raw.get("sigma_floor", 1e-4)),
+        garch_p=int(raw.get("garch_p", 1)),
+        garch_q=int(raw.get("garch_q", 1)),
+        backtest_points=int(raw.get("backtest_points", 120)),
+    )
+
+
 def load_config(path: str | Path) -> BotConfig:
     file_path = Path(path)
     with file_path.open("r", encoding="utf-8") as fh:
@@ -110,6 +137,7 @@ def load_config(path: str | Path) -> BotConfig:
         timing=TimingConfig(**_require(data, "timing")),
         instruments=InstrumentsConfig(**_require(data, "instruments")),
         state=StateConfig(**_require(data, "state")),
+        signal=_load_signal_config(data),
         action=ActionConfig(**_require(data, "action")),
         policy=PolicyConfig(**_require(data, "policy")),
         reward=RewardConfig(**_require(data, "reward")),

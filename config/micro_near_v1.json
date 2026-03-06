@@ -39,6 +39,20 @@
       "drawdown"
     ]
   },
+  "signal": {
+    "model": "arima_garch_ref",
+    "arima_order": [
+      1,
+      1,
+      2
+    ],
+    "forecast_horizon": 5,
+    "min_history": 120,
+    "sigma_floor": 0.0001,
+    "garch_p": 1,
+    "garch_q": 1,
+    "backtest_points": 120
+  },
   "action": {
     "type": "discrete_contract_delta",
     "space": [

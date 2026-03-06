@@ -13,6 +13,7 @@ from .kucoin_client import KuCoinApiError, KuCoinRestClient
 from .policy import TargetPositions, compute_target_positions
 from .risk import RiskContext, RiskDecision, RiskEngine
 from .signal import (
+    arima_garch_signal_from_spot_candles,
     futures_granularity_from_minutes,
     naive_signal_from_spot_candles,
     spot_candle_type_from_minutes,
@@ -24,6 +25,12 @@ from .state_store import JsonStateStore, RuntimeState
 class RebalanceResult:
     mode: str
     equity_usdt: float
+    signal_model: str
+    signal_direction: int
+    forecast_price: float
+    backtest_mse: float
+    backtest_mae: float
+    backtest_mape: float
     ret_hat: float
     sigma_hat: float
     spot_price: float
@@ -181,7 +188,45 @@ def run_once(
         granularity=fut_granularity,
     )
 
-    signal = naive_signal_from_spot_candles(spot_candles)
+    signal_model = "naive"
+    signal_direction = 0
+    forecast_price = 0.0
+    backtest_mse = 0.0
+    backtest_mae = 0.0
+    backtest_mape = 0.0
+    if cfg.signal.model.lower() == "arima_garch_ref":
+        try:
+            arima_signal = arima_garch_signal_from_spot_candles(
+                spot_candles,
+                arima_order=cfg.signal.arima_order,
+                forecast_horizon=cfg.signal.forecast_horizon,
+                min_history=cfg.signal.min_history,
+                sigma_floor=cfg.signal.sigma_floor,
+                garch_p=cfg.signal.garch_p,
+                garch_q=cfg.signal.garch_q,
+                backtest_points=cfg.signal.backtest_points,
+            )
+            signal = arima_signal
+            signal_model = "arima_garch_ref"
+            signal_direction = arima_signal.direction
+            forecast_price = arima_signal.forecast_price
+            backtest_mse = arima_signal.backtest.mse
+            backtest_mae = arima_signal.backtest.mae
+            backtest_mape = arima_signal.backtest.mape
+        except Exception:
+            signal = naive_signal_from_spot_candles(
+                spot_candles,
+                min_history=20,
+                sigma_floor=cfg.signal.sigma_floor,
+            )
+            signal_model = "naive_fallback"
+    else:
+        signal = naive_signal_from_spot_candles(
+            spot_candles,
+            min_history=20,
+            sigma_floor=cfg.signal.sigma_floor,
+        )
+
     spot_price, futures_price = _extract_prices(client, cfg)
     current_spot_qty, current_futures_contracts = _current_positions(client, cfg)
 
@@ -262,6 +307,12 @@ def run_once(
                     "planned_orders": [asdict(x) for x in planned_orders],
                     "sent_orders": sent_orders,
                     "equity_usdt": equity_usdt,
+                    "signal_model": signal_model,
+                    "signal_direction": signal_direction,
+                    "forecast_price": forecast_price,
+                    "backtest_mse": backtest_mse,
+                    "backtest_mae": backtest_mae,
+                    "backtest_mape": backtest_mape,
                     "ret_hat": signal.ret_hat,
                     "sigma_hat": signal.sigma_hat,
                 },
@@ -272,6 +323,12 @@ def run_once(
     return RebalanceResult(
         mode=mode,
         equity_usdt=equity_usdt,
+        signal_model=signal_model,
+        signal_direction=signal_direction,
+        forecast_price=forecast_price,
+        backtest_mse=backtest_mse,
+        backtest_mae=backtest_mae,
+        backtest_mape=backtest_mape,
         ret_hat=signal.ret_hat,
         sigma_hat=signal.sigma_hat,
         spot_price=spot_price,
