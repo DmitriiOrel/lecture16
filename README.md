@@ -7,7 +7,7 @@
 - `GARCH` считает `sigma_hat` по **доходностям** (returns), не по цене.
 - Размер позиции: **Kelly**
   - `z = ret_hat / (sigma_hat^2 + eps)`
-  - `notional = 1.5 * clip(z, -1, 1)`
+  - `notional = 1.5 * 0.5 * clip(z, -2, 2)`
 - После целевого spot бот строит хедж во futures (`hedge_ratio = -1`).
 
 ## Основные файлы

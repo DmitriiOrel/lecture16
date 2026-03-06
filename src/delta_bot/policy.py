@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from .config import InstrumentsConfig, PolicyConfig
 from .math_utils import clip, floor_to_step
 
+KELLY_FRACTION = 0.5
+
 
 @dataclass(frozen=True)
 class TargetPositions:
@@ -28,13 +30,13 @@ def compute_target_positions(
 
     # Kelly-style sizing:
     # z = ret_hat / sigma_hat^2
-    # spot_notional = n_side_max_usdt * z
+    # spot_notional = n_side_max_usdt * KELLY_FRACTION * z
     # then hedge futures against resulting spot size.
     var_hat = sigma_hat * sigma_hat
     raw_z = ret_hat / (var_hat + policy_cfg.epsilon)
     z = clip(raw_z, -policy_cfg.z_clip, policy_cfg.z_clip)
 
-    target_notional = z * policy_cfg.n_side_max_usdt
+    target_notional = z * policy_cfg.n_side_max_usdt * KELLY_FRACTION
     if (not policy_cfg.allow_spot_short) and target_notional < 0:
         target_notional = 0.0
 

@@ -75,7 +75,7 @@
   },
   "policy": {
     "epsilon": 1e-06,
-    "z_clip": 1.0,
+    "z_clip": 2.0,
     "n_side_max_usdt": 1.5,
     "allow_spot_short": true,
     "target_hedge_ratio": -1.0
