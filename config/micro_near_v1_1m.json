@@ -1,0 +1,85 @@
+{
+  "version": "micro_near_v1_1m",
+  "account": {
+    "equity_usdt": 15.0
+  },
+  "timing": {
+    "data_tf_minutes": 1,
+    "rebalance_tf_minutes": 1
+  },
+  "instruments": {
+    "spot_symbol": "NEAR-USDT",
+    "futures_symbol": "NEARUSDTM",
+    "futures_multiplier_base": 0.1,
+    "spot_base_increment": 0.0001,
+    "spot_min_funds_usdt": 0.1,
+    "futures_contract_step": 1
+  },
+  "state": {
+    "features": [
+      "spot_open",
+      "spot_high",
+      "spot_low",
+      "spot_close",
+      "fut_open",
+      "fut_high",
+      "fut_low",
+      "fut_close",
+      "basis",
+      "basis_zscore",
+      "ret_1",
+      "ret_3",
+      "rv_20",
+      "ml_ret_hat",
+      "ml_sigma_hat",
+      "position_spot_qty",
+      "position_fut_contracts",
+      "net_delta_base",
+      "fees_rolling",
+      "drawdown"
+    ]
+  },
+  "action": {
+    "type": "discrete_contract_delta",
+    "space": [
+      -2,
+      -1,
+      0,
+      1,
+      2
+    ],
+    "contract_step": 1,
+    "max_abs_contracts": 12
+  },
+  "policy": {
+    "epsilon": 1e-06,
+    "z_clip": 1.0,
+    "n_side_max_usdt": 1.3,
+    "allow_spot_short": false,
+    "target_hedge_ratio": -1.0
+  },
+  "reward": {
+    "formula": "(PnL - fee + funding) - lambda_delta*abs(net_delta_notional) - lambda_turnover*abs(delta_contracts) - lambda_dd*max(0,drawdown-dd_soft)^2",
+    "lambda_delta": 0.15,
+    "lambda_turnover": 0.02,
+    "lambda_dd": 8.0,
+    "drawdown_soft": 0.01
+  },
+  "risk_limits": {
+    "max_gross_notional_usdt": 3.0,
+    "max_single_order_notional_usdt": 0.35,
+    "max_futures_leverage": 1.5,
+    "target_net_delta_band_usdt": 0.26,
+    "hard_net_delta_limit_usdt": 0.65,
+    "max_daily_loss_usdt": 0.23,
+    "kill_switch_drawdown_usdt": 0.45,
+    "max_slippage_bps": 12.0,
+    "max_spread_for_entry_bps": 20.0,
+    "max_consecutive_api_errors": 3
+  },
+  "execution": {
+    "order_type": "market",
+    "slice_orders": true,
+    "max_retries": 3
+  }
+}
