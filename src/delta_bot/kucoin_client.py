@@ -39,6 +39,8 @@ class KuCoinRestClient:
         self.futures_base_url = futures_base_url.rstrip("/")
         self.timeout_s = timeout_s
         self._session = requests.Session()
+        self._time_offset_ms = 0
+        self._time_synced = False
 
     @classmethod
     def from_env(cls) -> "KuCoinRestClient":
@@ -82,6 +84,26 @@ class KuCoinRestClient:
         ).digest()
         return base64.b64encode(digest).decode("utf-8")
 
+    @staticmethod
+    def _local_now_ms() -> int:
+        return int(time.time() * 1000)
+
+    def _now_ms(self) -> int:
+        return self._local_now_ms() + int(self._time_offset_ms)
+
+    def _sync_time_offset(self, base_url: Optional[str] = None) -> None:
+        target_base = (base_url or self.spot_base_url).rstrip("/")
+        url = f"{target_base}/api/v1/timestamp"
+        response = self._session.get(url=url, timeout=self.timeout_s)
+        if response.status_code >= 400:
+            raise KuCoinApiError(f"HTTP {response.status_code}: {response.text}")
+        payload = response.json()
+        if payload.get("code") != "200000":
+            raise KuCoinApiError(str(payload))
+        server_ms = int(float(payload.get("data", 0)))
+        self._time_offset_ms = server_ms - self._local_now_ms()
+        self._time_synced = True
+
     def _request(
         self,
         *,
@@ -103,37 +125,55 @@ class KuCoinRestClient:
         if body is not None:
             body_str = json.dumps(body, separators=(",", ":"))
 
-        headers: Dict[str, str] = {"Content-Type": "application/json"}
-        if auth:
-            if self.credentials is None:
-                raise KuCoinApiError("Authenticated endpoint requested but credentials are missing")
-            ts = str(int(time.time() * 1000))
-            payload = f"{ts}{method_u}{path_with_query}{body_str}"
-            headers.update(
-                {
-                    "KC-API-KEY": self.credentials.api_key,
-                    "KC-API-SIGN": self._sign(payload),
-                    "KC-API-TIMESTAMP": ts,
-                    "KC-API-PASSPHRASE": self._signed_passphrase(),
-                    "KC-API-KEY-VERSION": self.credentials.api_key_version,
-                }
+        if auth and not self._time_synced:
+            # Best-effort time sync: if it fails, we'll still try the request and handle 400002 retry.
+            try:
+                self._sync_time_offset(base_url=base_url)
+            except Exception:
+                pass
+
+        for attempt in range(2):
+            headers: Dict[str, str] = {"Content-Type": "application/json"}
+            if auth:
+                if self.credentials is None:
+                    raise KuCoinApiError("Authenticated endpoint requested but credentials are missing")
+                ts = str(self._now_ms())
+                sign_payload = f"{ts}{method_u}{path_with_query}{body_str}"
+                headers.update(
+                    {
+                        "KC-API-KEY": self.credentials.api_key,
+                        "KC-API-SIGN": self._sign(sign_payload),
+                        "KC-API-TIMESTAMP": ts,
+                        "KC-API-PASSPHRASE": self._signed_passphrase(),
+                        "KC-API-KEY-VERSION": self.credentials.api_key_version,
+                    }
+                )
+
+            response = self._session.request(
+                method=method_u,
+                url=url,
+                params=None,
+                data=body_str if body is not None else None,
+                headers=headers,
+                timeout=self.timeout_s,
             )
 
-        response = self._session.request(
-            method=method_u,
-            url=url,
-            params=None,
-            data=body_str if body is not None else None,
-            headers=headers,
-            timeout=self.timeout_s,
-        )
-        if response.status_code >= 400:
-            raise KuCoinApiError(f"HTTP {response.status_code}: {response.text}")
+            if response.status_code >= 400:
+                text = response.text or ""
+                if auth and attempt == 0 and ("400002" in text or "Invalid KC-API-TIMESTAMP" in text):
+                    self._sync_time_offset(base_url=base_url)
+                    continue
+                raise KuCoinApiError(f"HTTP {response.status_code}: {text}")
 
-        payload = response.json()
-        if payload.get("code") != "200000":
-            raise KuCoinApiError(str(payload))
-        return payload
+            payload = response.json()
+            if payload.get("code") != "200000":
+                if auth and attempt == 0 and str(payload.get("code", "")) == "400002":
+                    self._sync_time_offset(base_url=base_url)
+                    continue
+                raise KuCoinApiError(str(payload))
+            return payload
+
+        raise KuCoinApiError("Unexpected request flow while handling KuCoin API response")
 
     # Public data
     def get_spot_candles(

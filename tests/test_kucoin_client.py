@@ -40,6 +40,52 @@ class KuCoinClientTests(unittest.TestCase):
         client = KuCoinRestClient(credentials=None)
         self.assertFalse(client.has_auth)
 
+    def test_retry_on_invalid_timestamp(self) -> None:
+        class _FakeResponse:
+            def __init__(self, status_code: int, payload: dict, text: str = ""):
+                self.status_code = status_code
+                self._payload = payload
+                self.text = text or str(payload)
+
+            def json(self):
+                return self._payload
+
+        class _FakeSession:
+            def __init__(self):
+                self.request_calls = 0
+                self.get_calls = 0
+
+            def request(self, **kwargs):
+                self.request_calls += 1
+                if self.request_calls == 1:
+                    return _FakeResponse(
+                        400,
+                        {"code": "400002", "msg": "Invalid KC-API-TIMESTAMP"},
+                        text='{"code":"400002","msg":"Invalid KC-API-TIMESTAMP"}',
+                    )
+                return _FakeResponse(
+                    200,
+                    {"code": "200000", "data": [{"available": "1.0", "holds": "0.0"}]},
+                )
+
+            def get(self, **kwargs):
+                self.get_calls += 1
+                return _FakeResponse(200, {"code": "200000", "data": 1700000000000})
+
+        creds = KuCoinCredentials(
+            api_key="k",
+            api_secret="secret",
+            api_passphrase="pass",
+            api_key_version="2",
+        )
+        client = KuCoinRestClient(credentials=creds)
+        fake = _FakeSession()
+        client._session = fake  # inject fake transport
+        balance = client.get_spot_account_balance("USDT", account_type="trade")
+        self.assertEqual(balance, 1.0)
+        self.assertEqual(fake.request_calls, 2)
+        self.assertGreaterEqual(fake.get_calls, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
